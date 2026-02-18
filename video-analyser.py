@@ -605,18 +605,6 @@ class QwenOmniAnalyzer:
                 frames_sampled = len(videos[0]) if videos else 0
                 has_audio = audios is not None and len(audios) > 0
                 print(f"Sampled {frames_sampled} frames | Audio extracted: {has_audio}")
-                if has_audio:
-                    for i, a in enumerate(audios):
-                        if isinstance(a, tuple):
-                            print(f"  audio[{i}]: shape={a[0].shape}, sr={a[1]}, dtype={a[0].dtype}")
-                        else:
-                            import numpy as np
-                            arr = np.asarray(a)
-                            print(f"  audio[{i}]: shape={arr.shape}, dtype={arr.dtype}")
-                # Show prompt tokens for audio/video placeholders
-                audio_tokens = text.count("<|audio_pad|>") + text.count("<|AUDIO|>")
-                video_tokens = text.count("<|video_pad|>") + text.count("<|VIDEO|>")
-                print(f"Prompt tokens — video_pad: {video_tokens}, audio_pad: {audio_tokens}")
 
                 mm_data = {}
                 if videos:

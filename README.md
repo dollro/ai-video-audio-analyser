@@ -32,22 +32,22 @@ uv sync
 
 This installs `modal`, `requests`, and `numpy` into a local `.venv` managed by [uv](https://docs.astral.sh/uv/).
 
-### 2. Authenticate with Modal
+### 2. Configure environment
 
 ```bash
-modal setup
+cp .env.example .env
+# Edit .env with your credentials (see comments in file)
 ```
 
-Or set credentials manually:
+### 3. Authenticate with Modal
 
 ```bash
-export MODAL_TOKEN_ID="your-token-id"
-export MODAL_TOKEN_SECRET="your-token-secret"
+modal setup   # interactive setup — OR fill MODAL_TOKEN_ID / MODAL_TOKEN_SECRET in .env
 ```
 
 Get your tokens at [modal.com/settings](https://modal.com/settings).
 
-### 3. (Optional) HuggingFace token for speaker diarization
+### 4. (Optional) HuggingFace token for speaker diarization
 
 Speaker diarization (identifying *who* said what) is powered by [pyannote.audio](https://github.com/pyannote/pyannote-audio), a gated model on Hugging Face. WhisperX handles transcription on its own, but diarization requires this extra step. If you only need transcription, skip this — just pass `--no-diarize`.
 
