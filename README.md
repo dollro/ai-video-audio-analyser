@@ -114,18 +114,19 @@ The models fall into two families with fundamentally different capabilities:
 ### Quick start
 
 ```bash
-# Default: Qwen3-VL 8B on a test video
-modal run video-analyser.py
-
-# Analyze a specific video
+# Visual analysis with Qwen3-VL 8B (default model)
 modal run video-analyser.py \
-  --video-url "https://ofasys-multimodal-wlcb-3.oss-cn-wulanchabu.aliyuncs.com/sibo.ssb/datasets/cookbook/ead2e3f0e7f836c9ec51236befdaf2d843ac13a6.mp4" \
+  --video-url "http://commondatastorage.googleapis.com/gtv-videos-bucket/sample/WeAreGoingOnBullrun.mp4"
+
+# Custom prompt
+modal run video-analyser.py \
+  --video-url "http://commondatastorage.googleapis.com/gtv-videos-bucket/sample/WeAreGoingOnBullrun.mp4" \
   --prompt "Describe what happens in this video step by step."
 
 # Use Qwen3-Omni for audio + visual understanding
 modal run video-analyser.py \
   --model qwen3-omni-30b-thinking \
-  --video-url "https://ofasys-multimodal-wlcb-3.oss-cn-wulanchabu.aliyuncs.com/sibo.ssb/datasets/cookbook/ead2e3f0e7f836c9ec51236befdaf2d843ac13a6.mp4" \
+  --video-url "http://commondatastorage.googleapis.com/gtv-videos-bucket/sample/WeAreGoingOnBullrun.mp4" \
   --prompt "Describe what is said and what is shown."
 
 # Reduce memory with 8-bit quantization
@@ -174,7 +175,7 @@ modal deploy video-analyser.py
 curl -X POST "https://your-app.modal.run/analyze" \
   -H "Content-Type: application/json" \
   -d '{
-    "video_url": "https://ofasys-multimodal-wlcb-3.oss-cn-wulanchabu.aliyuncs.com/sibo.ssb/datasets/cookbook/ead2e3f0e7f836c9ec51236befdaf2d843ac13a6.mp4",
+    "video_url": "http://commondatastorage.googleapis.com/gtv-videos-bucket/sample/WeAreGoingOnBullrun.mp4",
     "prompt": "What happens in this video?",
     "model": "qwen3-vl-8b",
     "fps": 1.0

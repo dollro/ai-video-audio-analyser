@@ -20,15 +20,13 @@ image = (
         "torchaudio==2.7.0",
         index_url="https://download.pytorch.org/whl/cu128",
     )
+    # Build deps needed for flash-attn compilation
+    .uv_pip_install("packaging", "wheel", "setuptools", "ninja", "psutil")
     # Compile flash-attn from source (CUDA devel image provides headers)
     .run_commands(
         "pip install flash-attn==2.8.3 --no-build-isolation"
     )
     .uv_pip_install(
-        "packaging",
-        "wheel",
-        "setuptools",
-        "ninja",
         "fastapi[standard]",
         "uvicorn[standard]",
         "pydantic>=2.0",
@@ -48,7 +46,6 @@ image = (
         "decord",
         "requests",
         "tqdm",
-        "psutil",
         "pyyaml",
     )
     .env({
@@ -623,7 +620,7 @@ class QwenOmniAnalyzer:
 
 @app.local_entrypoint()
 def main(
-    video_url: Optional[str] = None,
+    video_url: str = "",
     prompt: Optional[str] = None,
     model: str = "qwen3-vl-8b",
     fps: float = 1.0,
@@ -635,28 +632,24 @@ def main(
     """Run video analysis from the command line.
 
     Examples:
-        # Visual analysis with Qwen3-VL (default)
-        modal run analyze_video.py
+        # Visual analysis with Qwen3-VL
+        modal run video-analyser.py --video-url "https://example.com/video.mp4"
 
         # Audio + visual with Qwen3-Omni
-        modal run analyze_video.py --model qwen3-omni-30b-thinking
+        modal run video-analyser.py --model qwen3-omni-30b-thinking --video-url "https://example.com/video.mp4"
 
         # Qwen3-Omni with 8-bit quantization (lower memory)
-        modal run analyze_video.py --model qwen3-omni-30b-thinking --quantize-8bit
+        modal run video-analyser.py --model qwen3-omni-30b-thinking --quantize-8bit --video-url "https://example.com/video.mp4"
 
-        # Largest visual model (needs 8× H100)
-        modal run analyze_video.py --model qwen3-vl-235b
-
-        # Custom video
-        modal run analyze_video.py \\
+        # Custom prompt
+        modal run video-analyser.py \\
           --model qwen3-omni-30b-thinking \\
           --video-url "https://example.com/video.mp4" \\
           --prompt "Describe what you see and hear in detail" \\
           --fps 2.0
     """
-    if video_url is None:
-        video_url = "http://commondatastorage.googleapis.com/gtv-videos-bucket/sample/WeAreGoingOnBullrun.mp4"
-        print(f"Using default test video: {video_url}")
+    if not video_url:
+        raise ValueError("--video-url is required. Pass a public URL to a video file.")
 
     if prompt is None:
         prompt = (
