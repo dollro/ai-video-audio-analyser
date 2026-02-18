@@ -135,18 +135,94 @@ modal run video-analyser.py --fps 2.0
 
 ### Output
 
-Results are saved to `video_analysis_<model>.json`:
+Results are saved to `video_analysis_<model>.json` and printed to the terminal.
+
+<details>
+<summary><b>Example output</b> — Qwen3-Omni analyzing the <a href="http://commondatastorage.googleapis.com/gtv-videos-bucket/sample/WeAreGoingOnBullrun.mp4">Bullrun sample video</a> (47s, audio + visual)</summary>
+
+```
+Model    : Qwen/Qwen3-Omni-30B-A3B-Thinking (QWEN3-OMNI)
+Video    : WeAreGoingOnBullrun.mp4
+Duration : 47.46s
+Mode     : SINGLE PASS
+
+0:00–0:05
+A bald man with a beard and sunglasses drives a truck, looking toward the
+passenger side. The scene cuts to a red pickup truck with "Black Magic,"
+"Pepsi Max," and "FOX" logos parked on a cobblestone street, with the same
+man sitting on the tailgate. The truck then drives down a highway. The driver
+speaks: "Last year, the Smoking Tire won on the Bull Run Live rally in the
+2010 Ford SVT Raptor."
+
+0:05–0:10
+The driver is shown inside the truck again, talking while driving through
+traffic. The video then cuts to a wide shot of a large convoy of cars driving
+on a city street, including a black Ferrari and a light purple car with
+"Bullrun" branding. The driver continues: "I liked it so much, I bought one.
+Here it is."
+
+0:10–0:15
+A blue Mitsubishi Lancer rally car with "Pepsi Max" and "Bullrun" logos drives
+on a street. The scene cuts to a close-up of hands adjusting a radar detector
+mounted inside the truck. The driver says: "We're going back to Bull Run this
+year, of course, with help from our friends at Black Magic. And we're so
+serious about it, we got two Valentine One radar detectors."
+
+0:15–0:20
+A close-up shows the radar detector with its red lights flashing as it's
+adjusted. The driver looks out the window at a traffic light and says,
+"Oh yeah." The scene then cuts to the truck driving through an intersection.
+
+0:20–0:25
+A black Chevrolet Corvette drives on a highway. The camera then shows a red
+car with a white "Bullrun" logo driving on a highway, followed by a black
+Ferrari driving alongside it. The driver states: "So we're all set up. And
+the reason we got two is because we're going to be going a little bit faster."
+
+0:25–0:30
+A red Ford Mustang Shelby GT500 with white racing stripes is shown in a
+studio setting. The scene then cuts to a highway where people are standing
+on the roof of a white convertible car. The driver continues: "We got a 2011
+Shelby GT500 with a 550 horsepower all-aluminum V8."
+
+0:30–0:35
+Multiple rally cars, including a silver Audi and a white Ferrari with
+"Bullrun" branding, drive on a highway. The camera then shows a black pickup
+truck with "Pepsi Max" and "Bullrun" logos driving on the highway, with a
+woman in the bed of the truck. The driver says: "We are going to be right in
+the action, bringing you guys a video every single day, live from the Bull Run
+rally, July 9th to 16th."
+
+0:35–0:40
+The driver is shown again inside the truck, talking while driving through city
+traffic. The text "BlackMagicShine.com" appears at the bottom of the screen.
+He continues: "And the only place to watch it is on BlackMagicShine.com or
+right here on the Smoking Tire."
+
+0:40–0:47
+The camera shows the dashboard and the road ahead as the truck drives through
+an intersection. The driver finishes: "We're going back to Bull Run this year,
+of course, with help from our friends at Black Magic." A close-up shows the
+radar detector with its red lights flashing. The driver says, "Oh yeah." The
+video ends with the truck driving on the road.
+```
+
+</details>
+
+The JSON output file includes full metadata:
 
 ```json
 {
-  "analysis": "The video begins with...",
+  "analysis": "0:00–0:05\nA bald man with a beard...",
   "video_metadata": {
-    "resolution": "1920x1080",
-    "duration_seconds": 142.5,
-    "fps": 25.0,
-    "frames_sampled": 142
+    "resolution": "1280x720",
+    "duration_seconds": 47.46,
+    "fps": 24.0,
+    "frames_sampled": 46,
+    "audio_enabled": true,
+    "audio_extracted": true
   },
-  "model": "Qwen/Qwen3-VL-8B-Instruct",
+  "model": "Qwen/Qwen3-Omni-30B-A3B-Thinking",
   "chunked": false
 }
 ```
