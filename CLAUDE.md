@@ -24,13 +24,19 @@ Neither script runs locally. All computation happens on Modal's cloud GPU instan
 ## How to run
 
 ```bash
-# Video analysis (default: Qwen3-VL 8B on a test video)
-modal run video-analyser.py
+# Video analysis (--video-url is required)
+modal run video-analyser.py --video-url "http://commondatastorage.googleapis.com/gtv-videos-bucket/sample/WeAreGoingOnBullrun.mp4"
+
+# Audio + visual with Qwen3-Omni
+modal run video-analyser.py --model qwen3-omni-30b-thinking --video-url "https://example.com/video.mp4"
 
 # Transcription — accepts audio or video URLs
 modal run audio-transcript.py --audio-url "https://example.com/audio.mp3"
 
-# Deploy web API
+# Hot-reload web endpoint during development
+modal serve video-analyser.py
+
+# Deploy persistent web API
 modal deploy video-analyser.py
 ```
 
@@ -92,10 +98,20 @@ The routing logic in `main()` and `fastapi_app()` will pick it up automatically.
 
 The `hf_secret` in `audio-transcript.py` is `required=False` — the script will raise a clear error at runtime if diarization is requested without a token.
 
+## Modal conventions
+
+- Always use `import modal` and qualified names (`modal.App()`, `modal.Image.debian_slim()`)
+- Name Apps, Volumes, Secrets with **kebab-case** (e.g. `qwen-video-analyzer`, `whisper-cache`)
+- Put heavy `import` statements inside functions/methods, not at module level — global scope runs locally too
+- Dependencies belong in Image definitions attached to Functions, not in `pyproject.toml` (which is only for the local `modal` CLI env)
+- GPU strings: `"A100"`, `"A100-80GB"`, `"H100"`, `"H100:8"`, or `["H100", "A100", "any"]` for fallbacks
+- Docs: [modal.com/docs](https://modal.com/docs) | [Examples](https://modal.com/docs/examples) | [Full LLM reference](https://modal.com/llms-full.txt)
+
 ## Common gotchas
 
 - **First run is slow** — model weights (~15–70 GB) are downloaded to the Modal Volume. Subsequent runs start in seconds.
 - **`ffmpeg -c copy` chunk extraction** can produce slightly inaccurate cut points due to keyframe alignment. This is intentional (fast) and acceptable for analysis tasks.
 - **`inputs.to(model.device).to(model.dtype)`** in `QwenOmniAnalyzer` is required — omitting `.to(model.dtype)` causes dtype mismatch errors with bfloat16 models.
-- **`thinker_do_sample=False`** is hardcoded in Omni inference for reproducible results; the `temperature`/`top_p` params are accepted by the API but not passed to the thinker.
+- **`thinker_do_sample=False`** is hardcoded in Omni inference for reproducible results; `temperature`/`top_p`/`top_k` are **not valid** for Omni generate and will trigger a warning.
+- **Omni `generate()` returns `str`** with recent transformers — code handles both `str` (use directly) and tensor (decode via `batch_decode`) return types. Do not use `thinker_return_dict_in_generate=True`.
 - WhisperX `large-v2` uses `float16` compute type; change to `int8` if GPU memory is tight.

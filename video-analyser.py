@@ -403,18 +403,20 @@ class QwenOmniAnalyzer:
         with torch.no_grad():
             text_ids, _ = self.model.generate(
                 **inputs,
-                thinker_return_dict_in_generate=True,
                 thinker_max_new_tokens=max_new_tokens,
                 thinker_do_sample=False,
                 return_audio=False,
                 use_audio_in_video=use_audio_in_video,
             )
 
-        output_text = self.processor.batch_decode(
-            text_ids.sequences[:, inputs["input_ids"].shape[1]:],
-            skip_special_tokens=True,
-            clean_up_tokenization_spaces=False,
-        )[0]
+        if isinstance(text_ids, str):
+            output_text = text_ids
+        else:
+            output_text = self.processor.batch_decode(
+                text_ids[:, inputs["input_ids"].shape[1]:],
+                skip_special_tokens=True,
+                clean_up_tokenization_spaces=False,
+            )[0]
 
         return {"start_time": chunk_start, "end_time": chunk_end, "time_range": time_range, "analysis": output_text}
 
@@ -580,18 +582,20 @@ class QwenOmniAnalyzer:
                 with torch.no_grad():
                     text_ids, _ = self.model.generate(
                         **inputs,
-                        thinker_return_dict_in_generate=True,
                         thinker_max_new_tokens=max_new_tokens,
                         thinker_do_sample=False,
                         return_audio=False,
                         use_audio_in_video=use_audio_in_video,
                     )
 
-                output_text = self.processor.batch_decode(
-                    text_ids.sequences[:, inputs["input_ids"].shape[1]:],
-                    skip_special_tokens=True,
-                    clean_up_tokenization_spaces=False,
-                )[0]
+                if isinstance(text_ids, str):
+                    output_text = text_ids
+                else:
+                    output_text = self.processor.batch_decode(
+                        text_ids[:, inputs["input_ids"].shape[1]:],
+                        skip_special_tokens=True,
+                        clean_up_tokenization_spaces=False,
+                    )[0]
 
                 return {
                     "prompt": prompt,
@@ -713,12 +717,7 @@ def main(
     print(f"\nFull results saved to: {output_file}")
 
 
-@app.function(
-    gpu="A100",
-    volumes={CACHE_DIR: cache_vol},
-    timeout=3600,
-    memory=65536,
-)
+@app.function(timeout=3600)
 @modal.asgi_app()
 def fastapi_app():
     """FastAPI web endpoint for the video analyzer."""
