@@ -2,7 +2,7 @@
 .env
 .env.local
 
-# Python
+# Python / uv
 __pycache__/
 *.py[cod]
 *$py.class
@@ -10,6 +10,7 @@ __pycache__/
 dist/
 build/
 *.egg
+.venv/
 
 # Output files
 *.json

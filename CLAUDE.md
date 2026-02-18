@@ -29,7 +29,7 @@ modal deploy video-analyser.py
 | `video-analyser.py` | Main video analysis app — Modal image, two analyzer classes, FastAPI web endpoint |
 | `audio-transcript.py` | WhisperX transcription app — Modal image, single model class (accepts audio + video) |
 | `.env.example` | Template for local env vars (MODAL tokens, HF_TOKEN) |
-| `requirements.txt` | Minimal local deps (`modal`, `requests`) |
+| `pyproject.toml` | Project metadata and dependencies (managed by uv) |
 
 ## Architecture
 

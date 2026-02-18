@@ -27,8 +27,10 @@ Both scripts run entirely on Modal's serverless GPU infrastructure. You don't ma
 ### 1. Install dependencies
 
 ```bash
-pip install modal
+uv sync
 ```
+
+This installs `modal`, `requests`, and `numpy` into a local `.venv` managed by [uv](https://docs.astral.sh/uv/).
 
 ### 2. Authenticate with Modal
 

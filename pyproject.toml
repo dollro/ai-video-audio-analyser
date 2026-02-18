@@ -1,0 +1,10 @@
+[project]
+name = "ai-video-audio-analyser"
+version = "0.1.0"
+description = "Serverless AI pipelines for video and audio analysis on Modal"
+requires-python = ">=3.11"
+dependencies = [
+    "modal",
+    "requests",
+    "numpy<2.0",
+]
