@@ -655,7 +655,7 @@ def main(
           --fps 2.0
     """
     if video_url is None:
-        video_url = "https://qianwen-res.oss-cn-beijing.aliyuncs.com/Qwen2-VL/space.mp4"
+        video_url = "http://commondatastorage.googleapis.com/gtv-videos-bucket/sample/WeAreGoingOnBullrun.mp4"
         print(f"Using default test video: {video_url}")
 
     if prompt is None:

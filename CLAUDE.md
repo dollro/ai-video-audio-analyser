@@ -9,6 +9,18 @@ Two serverless Modal scripts for AI-powered media analysis:
 
 Neither script runs locally. All computation happens on Modal's cloud GPU instances.
 
+### Infrastructure stack
+
+| Component | video-analyser | audio-transcript |
+|-----------|---------------|-----------------|
+| Base image | `nvidia/cuda:12.8.0-devel-ubuntu22.04` | `modal.Image.debian_slim` |
+| Python | 3.12 | 3.12 |
+| CUDA | 12.8 | (bundled via PyTorch pip) |
+| PyTorch | 2.7.0 (cu128) | 2.7.0 |
+| flash-attn | 2.8.3 (compiled from source) | — |
+| whisperx | — | 3.8.1 |
+| Installer | `uv_pip_install` | `uv_pip_install` |
+
 ## How to run
 
 ```bash
@@ -33,7 +45,7 @@ modal deploy video-analyser.py
 
 ## Architecture
 
-### `analyze_video.py`
+### `video-analyser.py`
 
 Two Modal classes dispatched based on model series:
 
@@ -46,7 +58,7 @@ Routing logic lives in `main()` and `fastapi_app()`: if `model_config["series"] 
 
 **Model cache** lives in a persistent Modal Volume at `/cache` (shared between both scripts).
 
-### `transcribe.py`
+### `audio-transcript.py`
 
 Single `WhisperXModel` class with three pipeline stages:
 1. `whisperx.load_model("large-v2")` → raw segments
@@ -57,7 +69,7 @@ Single `WhisperXModel` class with three pipeline stages:
 
 ## Adding a new model
 
-Add an entry to the `MODELS` dict in `analyze_video.py`:
+Add an entry to the `MODELS` dict in `video-analyser.py`:
 
 ```python
 "my-model-key": {
@@ -74,11 +86,11 @@ The routing logic in `main()` and `fastapi_app()` will pick it up automatically.
 ## Secrets
 
 - **Modal credentials**: `MODAL_TOKEN_ID` / `MODAL_TOKEN_SECRET` in env, or via `modal setup`
-- **HuggingFace token**: required only for diarization in `transcribe.py`
+- **HuggingFace token**: required only for diarization in `audio-transcript.py`
   - Create Modal secret: `modal secret create huggingface-secret HF_TOKEN=hf_...`
   - Or set `HF_TOKEN` env var before running
 
-The `hf_secret` in `transcribe.py` is `required=False` — the script will raise a clear error at runtime if diarization is requested without a token.
+The `hf_secret` in `audio-transcript.py` is `required=False` — the script will raise a clear error at runtime if diarization is requested without a token.
 
 ## Common gotchas
 
