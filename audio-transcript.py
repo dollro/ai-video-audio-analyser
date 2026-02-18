@@ -2,27 +2,15 @@ import modal
 import json
 import os
 
-cuda_version = "12.4.0"
-flavor = "devel"
-operating_sys = "ubuntu22.04"
-tag = f"{cuda_version}-{flavor}-{operating_sys}"
-
 image = (
-    modal.Image.from_registry(f"nvidia/cuda:{tag}", add_python="3.11")
-    .apt_install(
-        "git",
-        "ffmpeg",
-        "libcudnn8",
-        "libcudnn8-dev",
+    modal.Image.debian_slim(python_version="3.12")
+    .apt_install("git", "ffmpeg")
+    .uv_pip_install(
+        "torch==2.7.0",
+        "torchaudio==2.7.0",
     )
-    .pip_install(
-        "torch==2.0.0",
-        "torchaudio==2.0.0",
-        "numpy<2.0",
-        index_url="https://download.pytorch.org/whl/cu118",
-    )
-    .pip_install(
-        "whisperx==3.4.2",
+    .uv_pip_install(
+        "whisperx==3.8.1",
         "ffmpeg-python",
     )
 )

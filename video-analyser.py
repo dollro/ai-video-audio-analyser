@@ -4,32 +4,27 @@ from pathlib import Path
 from typing import Optional, Dict, Any
 
 # Configure CUDA environment
-cuda_version = "12.4.0"
+cuda_version = "12.8.0"
 flavor = "devel"
 operating_sys = "ubuntu22.04"
 tag = f"{cuda_version}-{flavor}-{operating_sys}"
 
 image = (
-    modal.Image.from_registry(f"nvidia/cuda:{tag}", add_python="3.11")
+    modal.Image.from_registry(f"nvidia/cuda:{tag}", add_python="3.12")
     .entrypoint([])
-    .apt_install(
-        "git",
-        "ffmpeg",
-        "libcudnn8",
-        "libcudnn8-dev",
+    .apt_install("git", "ffmpeg")
+    # Install PyTorch with CUDA 12.8
+    .uv_pip_install(
+        "torch==2.7.0",
+        "torchvision==0.22.0",
+        "torchaudio==2.7.0",
+        index_url="https://download.pytorch.org/whl/cu128",
     )
-    # Install PyTorch first
-    .pip_install(
-        "torch==2.5.1",
-        "torchvision==0.20.1",
-        "torchaudio==2.5.1",
-        index_url="https://download.pytorch.org/whl/cu124",
-    )
-    # Install flash-attn from official pre-built wheel
+    # Compile flash-attn from source (CUDA devel image provides headers)
     .run_commands(
-        "pip install https://github.com/Dao-AILab/flash-attention/releases/download/v2.8.3/flash_attn-2.8.3+cu12torch2.5cxx11abiFALSE-cp311-cp311-linux_x86_64.whl"
+        "pip install flash-attn==2.8.3 --no-build-isolation"
     )
-    .pip_install(
+    .uv_pip_install(
         "packaging",
         "wheel",
         "setuptools",
@@ -47,7 +42,7 @@ image = (
         "tokenizers",
         "einops",
         "Pillow",
-        "numpy<2.0",
+        "numpy",
         "opencv-python-headless",
         "av",
         "decord",
