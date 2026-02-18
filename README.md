@@ -45,9 +45,18 @@ export MODAL_TOKEN_SECRET="your-token-secret"
 
 Get your tokens at [modal.com/settings](https://modal.com/settings).
 
-### 3. (For transcription with speaker diarization) Add a HuggingFace token
+### 3. (Optional) HuggingFace token for speaker diarization
 
-The diarization pipeline uses `pyannote/speaker-diarization`, which requires accepting the model license on Hugging Face and providing a token.
+Speaker diarization (identifying *who* said what) is powered by [pyannote.audio](https://github.com/pyannote/pyannote-audio), a gated model on Hugging Face. WhisperX handles transcription on its own, but diarization requires this extra step. If you only need transcription, skip this — just pass `--no-diarize`.
+
+**How to get the token:**
+
+1. Create a free account at [huggingface.co](https://huggingface.co/join)
+2. Go to [huggingface.co/pyannote/speaker-diarization-3.1](https://huggingface.co/pyannote/speaker-diarization-3.1) and accept the license
+3. Also accept the license at [huggingface.co/pyannote/segmentation-3.0](https://huggingface.co/pyannote/segmentation-3.0)
+4. Generate an access token at [huggingface.co/settings/tokens](https://huggingface.co/settings/tokens) (a `read` token is sufficient)
+
+**Then provide it via one of:**
 
 **Option A — Modal secret (recommended):**
 
@@ -55,7 +64,7 @@ The diarization pipeline uses `pyannote/speaker-diarization`, which requires acc
 modal secret create huggingface-secret HF_TOKEN=hf_your_token_here
 ```
 
-**Option B — Environment variable:**
+**Option B — Environment variable / `.env` file:**
 
 ```bash
 export HF_TOKEN=hf_your_token_here
@@ -78,21 +87,43 @@ Uses [Qwen2-VL](https://huggingface.co/Qwen/Qwen2-VL-7B-Instruct), [Qwen3-VL](ht
 | `qwen3-omni-30b-thinking` | Qwen3-Omni 30B | A100-80GB | Audio + Visual + reasoning |
 | `qwen3-omni-30b-instruct` | Qwen3-Omni 30B | H100 | Audio + Visual |
 
+### Choosing the right model
+
+The models fall into two families with fundamentally different capabilities:
+
+**Qwen3-VL (Vision-Language)** — analyzes video frames and text only. No audio processing. Superior visual understanding (OCR, charts, fine details). The 235B variant is state-of-the-art for pure visual tasks but requires 8x H100 GPUs.
+
+**Qwen3-Omni (Multimodal)** — processes audio and video together natively. Smaller and faster than VL-235B, but understands the relationship between what is said and what is shown. This is the right choice when your video has meaningful audio (speech, music, sound effects).
+
+**Thinking vs Instruct** — The Omni family offers two variants:
+- **Thinking** uses chain-of-thought reasoning before answering. Better at complex tasks where audio and visual cues need to be connected (e.g. a lecturer pointing at a whiteboard while explaining a formula). Slower, uses more memory.
+- **Instruct** answers immediately without a reasoning step. Faster and cheaper, best for straightforward tasks like describing scenes or casual conversation.
+
+| Your use case | Recommended model |
+|---|---|
+| Quick visual description, no audio needed | `qwen3-vl-8b` _(default)_ |
+| Highest accuracy for documents, diagrams, complex visuals | `qwen3-vl-235b` |
+| Video with audio — lectures, tutorials, analysis | `qwen3-omni-30b-thinking` |
+| Video with audio — vlogs, casual content, real-time | `qwen3-omni-30b-instruct` |
+| Fast testing / prototyping | `qwen2-vl-2b` |
+
+> **Tip:** If your video has important audio (speech, narration), always pick an Omni model. The VL models are "deaf" — they will analyze the visuals in detail but have no idea what is being said.
+
 ### Quick start
 
 ```bash
 # Default: Qwen3-VL 8B on a test video
 modal run video-analyser.py
 
-# Analyze your own video
+# Analyze a specific video
 modal run video-analyser.py \
-  --video-url "https://example.com/lecture.mp4" \
-  --prompt "Summarize the key points of this lecture as bullet-point notes."
+  --video-url "https://ofasys-multimodal-wlcb-3.oss-cn-wulanchabu.aliyuncs.com/sibo.ssb/datasets/cookbook/ead2e3f0e7f836c9ec51236befdaf2d843ac13a6.mp4" \
+  --prompt "Describe what happens in this video step by step."
 
 # Use Qwen3-Omni for audio + visual understanding
 modal run video-analyser.py \
   --model qwen3-omni-30b-thinking \
-  --video-url "https://example.com/interview.mp4" \
+  --video-url "https://ofasys-multimodal-wlcb-3.oss-cn-wulanchabu.aliyuncs.com/sibo.ssb/datasets/cookbook/ead2e3f0e7f836c9ec51236befdaf2d843ac13a6.mp4" \
   --prompt "Describe what is said and what is shown."
 
 # Reduce memory with 8-bit quantization
@@ -139,7 +170,7 @@ modal deploy video-analyser.py
 curl -X POST "https://your-app.modal.run/analyze" \
   -H "Content-Type: application/json" \
   -d '{
-    "video_url": "https://example.com/video.mp4",
+    "video_url": "https://ofasys-multimodal-wlcb-3.oss-cn-wulanchabu.aliyuncs.com/sibo.ssb/datasets/cookbook/ead2e3f0e7f836c9ec51236befdaf2d843ac13a6.mp4",
     "prompt": "What happens in this video?",
     "model": "qwen3-vl-8b",
     "fps": 1.0
