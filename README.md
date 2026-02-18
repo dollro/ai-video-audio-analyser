@@ -155,7 +155,9 @@ Results are saved to `video_analysis_<model>.json`:
 
 ### Long video support (chunking)
 
-For videos longer than 2 minutes, `QwenOmniAnalyzer` automatically splits the video into 30-second chunks, processes each independently, and merges the results with preserved timestamps. This avoids GPU out-of-memory errors on long content.
+For videos longer than 2 minutes, `QwenOmniAnalyzer` automatically splits the video into 30-second chunks using `ffmpeg -c copy` (stream copy, no re-encoding), processes each chunk independently, and merges the results with preserved timestamps. This avoids GPU out-of-memory errors since multimodal models must hold video frames and audio in VRAM simultaneously.
+
+Chunking only applies to `video-analyser.py`. The audio transcription pipeline (`audio-transcript.py`) does **not** need chunking — WhisperX processes audio in internal batches and handles long files natively without running out of memory.
 
 ### Web API
 
