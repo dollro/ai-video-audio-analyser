@@ -110,9 +110,13 @@ MODELS = {
 }
 
 
+hf_secret = modal.Secret.from_name("huggingface-secret", required=False)
+
+
 @app.cls(
     gpu="A100",
     volumes={CACHE_DIR: cache_vol},
+    secrets=[hf_secret],
     max_containers=1,
     scaledown_window=600,
     timeout=3600,
@@ -286,6 +290,7 @@ class QwenVLAnalyzer:
 @app.cls(
     gpu="A100-80GB",
     volumes={CACHE_DIR: cache_vol},
+    secrets=[hf_secret],
     max_containers=1,
     scaledown_window=600,
     timeout=3600,
@@ -401,7 +406,7 @@ class QwenOmniAnalyzer:
         ).to(self.model.device).to(self.model.dtype)
 
         with torch.no_grad():
-            text_ids, _ = self.model.generate(
+            result = self.model.generate(
                 **inputs,
                 thinker_max_new_tokens=max_new_tokens,
                 thinker_do_sample=False,
@@ -409,11 +414,14 @@ class QwenOmniAnalyzer:
                 use_audio_in_video=use_audio_in_video,
             )
 
-        if isinstance(text_ids, str):
-            output_text = text_ids
+        # Newer transformers returns str directly; older returns tuple/tensor
+        if isinstance(result, tuple):
+            result = result[0]
+        if isinstance(result, str):
+            output_text = result
         else:
             output_text = self.processor.batch_decode(
-                text_ids[:, inputs["input_ids"].shape[1]:],
+                result[:, inputs["input_ids"].shape[1]:],
                 skip_special_tokens=True,
                 clean_up_tokenization_spaces=False,
             )[0]
@@ -580,7 +588,7 @@ class QwenOmniAnalyzer:
 
                 print("Generating analysis...")
                 with torch.no_grad():
-                    text_ids, _ = self.model.generate(
+                    result = self.model.generate(
                         **inputs,
                         thinker_max_new_tokens=max_new_tokens,
                         thinker_do_sample=False,
@@ -588,11 +596,14 @@ class QwenOmniAnalyzer:
                         use_audio_in_video=use_audio_in_video,
                     )
 
-                if isinstance(text_ids, str):
-                    output_text = text_ids
+                # Newer transformers returns str directly; older returns tuple/tensor
+                if isinstance(result, tuple):
+                    result = result[0]
+                if isinstance(result, str):
+                    output_text = result
                 else:
                     output_text = self.processor.batch_decode(
-                        text_ids[:, inputs["input_ids"].shape[1]:],
+                        result[:, inputs["input_ids"].shape[1]:],
                         skip_special_tokens=True,
                         clean_up_tokenization_spaces=False,
                     )[0]
