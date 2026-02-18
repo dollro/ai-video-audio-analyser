@@ -86,8 +86,8 @@ Uses [Qwen2-VL](https://huggingface.co/Qwen/Qwen2-VL-7B-Instruct), [Qwen3-VL](ht
 | `qwen2-vl-7b` | Qwen2-VL 7B | A100 | Visual only |
 | `qwen3-vl-8b` | Qwen3-VL 8B | A100 | Visual only, strong _(default)_ |
 | `qwen3-vl-235b` | Qwen3-VL 235B | 8× H100 | Visual only, SOTA |
-| `qwen3-omni-30b-thinking` | Qwen3-Omni 30B | A100-80GB | Audio + Visual + reasoning |
-| `qwen3-omni-30b-instruct` | Qwen3-Omni 30B | H100 | Audio + Visual |
+| `qwen3-omni-30b-thinking` | Qwen3-Omni 30B | 2× A100-80GB | Audio + Visual + reasoning |
+| `qwen3-omni-30b-instruct` | Qwen3-Omni 30B | 2× H100 | Audio + Visual |
 
 ### Choosing the right model
 
@@ -129,11 +129,6 @@ modal run video-analyser.py \
   --video-url "http://commondatastorage.googleapis.com/gtv-videos-bucket/sample/WeAreGoingOnBullrun.mp4" \
   --prompt "Describe what is said and what is shown."
 
-# Reduce memory with 8-bit quantization
-modal run video-analyser.py \
-  --model qwen3-omni-30b-thinking \
-  --quantize-8bit
-
 # Sample more frames (higher quality, slower)
 modal run video-analyser.py --fps 2.0
 ```
@@ -158,7 +153,7 @@ Results are saved to `video_analysis_<model>.json`:
 
 ### Long video support (chunking)
 
-For videos longer than 2 minutes, `QwenOmniAnalyzer` automatically splits the video into 30-second chunks using `ffmpeg -c copy` (stream copy, no re-encoding), processes each chunk independently, and merges the results with preserved timestamps. This avoids GPU out-of-memory errors since multimodal models must hold video frames and audio in VRAM simultaneously.
+For videos longer than 2 minutes, `QwenOmniAnalyzer` automatically splits the video into 30-second chunks using `ffmpeg -c copy` (stream copy, no re-encoding), submits all chunks in a single `llm.generate()` call for concurrent processing via vLLM's continuous batching, and merges the results with preserved timestamps. This avoids GPU out-of-memory errors since multimodal models must hold video frames and audio in VRAM simultaneously.
 
 Chunking only applies to `video-analyser.py`. The audio transcription pipeline (`audio-transcript.py`) does **not** need chunking — WhisperX processes audio in internal batches and handles long files natively without running out of memory.
 
@@ -260,8 +255,8 @@ modal run audio-transcript.py \
 │                                                          │
 │  ┌─────────────────────────┐  ┌────────────────────────┐│
 │  │   QwenVLAnalyzer        │  │  QwenOmniAnalyzer      ││
-│  │   A100 · 64 GB VRAM     │  │  A100-80GB · 160 GB    ││
-│  │   Qwen2/3-VL models     │  │  Qwen3-Omni models     ││
+│  │   A100 · vLLM (tp=1)   │  │  2×A100-80GB · vLLM    ││
+│  │   Qwen2/3-VL models     │  │  Qwen3-Omni (tp=2)    ││
 │  └─────────────────────────┘  └────────────────────────┘│
 │                                                          │
 │  ┌─────────────────────────────────────────────────────┐│

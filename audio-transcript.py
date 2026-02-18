@@ -8,10 +8,12 @@ image = (
     .uv_pip_install(
         "torch==2.7.0",
         "torchaudio==2.7.0",
+        uv_version="0.10.3",
     )
     .uv_pip_install(
         "whisperx==3.8.1",
         "ffmpeg-python",
+        uv_version="0.10.3",
     )
 )
 
@@ -21,10 +23,9 @@ GPU_CONFIG = "A100"
 CACHE_DIR = "/cache"
 cache_vol = modal.Volume.from_name("whisper-cache", create_if_missing=True)
 
-# HuggingFace token secret — required for speaker diarization.
-# Create a Modal secret named "huggingface-secret" with key HF_TOKEN,
-# or set HF_TOKEN in your environment before running.
-hf_secret = modal.Secret.from_name("huggingface-secret", required=False)
+# HuggingFace token — needed for speaker diarization.
+# Set HF_TOKEN in your environment, or create a Modal secret named "huggingface-secret".
+hf_secret = modal.Secret.from_dict({"HF_TOKEN": os.environ.get("HF_TOKEN", "")})
 
 
 @app.cls(

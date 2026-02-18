@@ -17,6 +17,7 @@ Neither script runs locally. All computation happens on Modal's cloud GPU instan
 | Python | 3.12 | 3.12 |
 | CUDA | 12.8 | (bundled via PyTorch pip) |
 | PyTorch | 2.7.0 (cu128) | 2.7.0 |
+| vLLM | 0.13.0 | — |
 | flash-attn | 2.8.3 (compiled from source) | — |
 | whisperx | — | 3.8.1 |
 | Installer | `uv_pip_install` | `uv_pip_install` |
@@ -53,14 +54,16 @@ modal deploy video-analyser.py
 
 ### `video-analyser.py`
 
-Two Modal classes dispatched based on model series:
+Two Modal classes dispatched based on model series, both using **vLLM** for inference:
 
-- **`QwenVLAnalyzer`** — visual-only, `AutoModelForVision2Seq`, flash attention for Qwen3
-- **`QwenOmniAnalyzer`** — audio+visual, `Qwen3OmniMoeForConditionalGeneration`, talker disabled
+- **`QwenVLAnalyzer`** — visual-only, vLLM `LLM()` with `process_vision_info` for multimodal data
+- **`QwenOmniAnalyzer`** — audio+visual, vLLM `LLM()` with tensor parallelism (tp=2) on 2x A100-80GB
 
 Routing logic lives in `main()` and `fastapi_app()`: if `model_config["series"] == "qwen3-omni"` → `QwenOmniAnalyzer`, otherwise → `QwenVLAnalyzer`.
 
-**Chunked processing** (`QwenOmniAnalyzer`): videos longer than `min_duration_for_chunking` (default 120s) are split into `chunk_duration`-second segments via `ffmpeg -c copy` (no re-encode), processed individually, then concatenated.
+**Tensor parallelism**: each model in `MODELS` has a `tensor_parallel_size` field. Omni models use tp=2 (2 GPUs), VL models use tp=1 (single GPU), and the 235B model uses tp=8.
+
+**Batched chunk processing** (`QwenOmniAnalyzer`): videos longer than `min_duration_for_chunking` (default 120s) are split into segments via `ffmpeg -c copy`, then all chunks are submitted in a single `llm.generate()` call — vLLM's continuous batching processes them concurrently across GPUs.
 
 **Model cache** lives in a persistent Modal Volume at `/cache` (shared between both scripts).
 
@@ -84,6 +87,8 @@ Add an entry to the `MODELS` dict in `video-analyser.py`:
     "memory": 65536,
     "description": "Short description",
     "series": "qwen3",  # or "qwen2", "qwen3-omni"
+    "tensor_parallel_size": 1,  # number of GPUs for vLLM tensor parallelism
+    "max_model_len": 32768,
 },
 ```
 
@@ -111,7 +116,11 @@ The `hf_secret` in `audio-transcript.py` is `required=False` — the script will
 
 - **First run is slow** — model weights (~15–70 GB) are downloaded to the Modal Volume. Subsequent runs start in seconds.
 - **`ffmpeg -c copy` chunk extraction** can produce slightly inaccurate cut points due to keyframe alignment. This is intentional (fast) and acceptable for analysis tasks.
-- **`inputs.to(model.device).to(model.dtype)`** in `QwenOmniAnalyzer` is required — omitting `.to(model.dtype)` causes dtype mismatch errors with bfloat16 models.
-- **`thinker_do_sample=False`** is hardcoded in Omni inference for reproducible results; `temperature`/`top_p`/`top_k` are **not valid** for Omni generate and will trigger a warning.
-- **Omni `generate()` returns `str`** with recent transformers — code handles both `str` (use directly) and tensor (decode via `batch_decode`) return types. Do not use `thinker_return_dict_in_generate=True`.
+- **`VLLM_WORKER_MULTIPROC_METHOD=spawn`** is required globally — vLLM V1's multiprocess executor forks by default, but pynvml calls `cuInit()` before fork which breaks CUDA in child workers. Spawn creates fresh processes and avoids this. (V0 engine was removed in vLLM 0.13.0; `VLLM_USE_V1=0` is no longer recognized.)
+- **`max_num_seqs=8`** limits concurrent batch processing in vLLM. For chunked videos, all chunks are submitted in one `llm.generate()` call but vLLM queues beyond 8.
+- **Multi-modal data dict** — vLLM expects `{"prompt": ..., "multi_modal_data": {"video": ..., "audio": ...}}` format. The processor's `process_vision_info` / `process_mm_info` output feeds directly into `multi_modal_data`.
+- **`mm_processor_kwargs`** — required in the vLLM input dict for VL models. `process_vision_info(..., return_video_kwargs=True)` returns a third value (`video_kwargs`) that must be passed through.
+- **Omni audio via explicit content type** — vLLM V1's `use_audio_in_video` in `mm_processor_kwargs` is unreliable (audio embeddings silently dropped). Instead, add `{"type": "audio", "audio": video_path}` as an explicit content item in the message alongside the video. This produces `<|audio_pad|>` tokens in the prompt so the model knows where to attend to audio. Call `process_mm_info(messages, use_audio_in_video=False)` since audio is handled as a standalone modality.
+- **vLLM shutdown noise** — when Modal tears down the container, vLLM's tensor-parallel workers log `KeyboardInterrupt` and "Engine core proc died unexpectedly". This is cosmetic — all work completes before shutdown. Caused by a race between Modal's container lifecycle and vLLM's multiprocess executor cleanup.
+- **`enforce_eager=True`** — disables `torch.compile` and CUDA graph capture in vLLM, cutting cold-start time from ~4 min to ~1 min. The ~10-20% per-token generation slowdown is negligible for multimodal workloads where video/audio prefill dominates.
 - WhisperX `large-v2` uses `float16` compute type; change to `int8` if GPU memory is tight.

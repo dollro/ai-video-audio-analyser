@@ -1,3 +1,4 @@
+import os
 import modal
 import json
 from pathlib import Path
@@ -19,12 +20,7 @@ image = (
         "torchvision==0.22.0",
         "torchaudio==2.7.0",
         index_url="https://download.pytorch.org/whl/cu128",
-    )
-    # Build deps needed for flash-attn compilation
-    .uv_pip_install("packaging", "wheel", "setuptools", "ninja", "psutil")
-    # Compile flash-attn from source (CUDA devel image provides headers)
-    .run_commands(
-        "pip install flash-attn==2.8.3 --no-build-isolation"
+        uv_version="0.10.3",
     )
     .uv_pip_install(
         "fastapi[standard]",
@@ -33,7 +29,7 @@ image = (
         "transformers>=4.48.0",
         "accelerate>=0.26.0",
         "bitsandbytes>=0.44.0",
-        "qwen-vl-utils>=0.0.8",
+        "qwen-vl-utils>=0.0.14",
         "qwen-omni-utils",
         "huggingface_hub[hf_transfer]",
         "safetensors",
@@ -47,11 +43,24 @@ image = (
         "requests",
         "tqdm",
         "pyyaml",
+        uv_version="0.10.3",
     )
+    # Install vLLM (may adjust PyTorch internals)
+    .uv_pip_install("vllm==0.13.0", uv_version="0.10.3")
+    # Build deps + compile flash-attn AFTER vLLM so it links against the final PyTorch ABI
+    .uv_pip_install("packaging", "wheel", "setuptools", "ninja", "psutil", uv_version="0.10.3")
+    .run_commands(
+        "pip install flash-attn==2.8.3 --no-build-isolation"
+    )
+    # Re-install hf_transfer after vLLM (vLLM may override huggingface_hub without the extra)
+    .uv_pip_install("hf_transfer", uv_version="0.10.3")
     .env({
         "HF_HUB_ENABLE_HF_TRANSFER": "1",
         "HF_HOME": "/cache/huggingface",
         "TORCH_CUDA_ARCH_LIST": "8.0;8.6;8.9;9.0",
+        # Force spawn (not fork) for vLLM V1 tensor-parallel workers —
+        # pynvml calls cuInit() before fork, which breaks CUDA in children.
+        "VLLM_WORKER_MULTIPROC_METHOD": "spawn",
     })
 )
 
@@ -69,6 +78,8 @@ MODELS = {
         "memory": 32768,
         "description": "Smallest Qwen2-VL model, good for basic testing",
         "series": "qwen2",
+        "tensor_parallel_size": 1,
+        "max_model_len": 32768,
     },
     "qwen2-vl-7b": {
         "id": "Qwen/Qwen2-VL-7B-Instruct",
@@ -76,6 +87,8 @@ MODELS = {
         "memory": 49152,
         "description": "Medium Qwen2-VL model",
         "series": "qwen2",
+        "tensor_parallel_size": 1,
+        "max_model_len": 32768,
     },
     # Qwen3-VL models
     "qwen3-vl-8b": {
@@ -84,6 +97,8 @@ MODELS = {
         "memory": 65536,
         "description": "Qwen3-VL 8B — balanced speed and quality",
         "series": "qwen3",
+        "tensor_parallel_size": 1,
+        "max_model_len": 32768,
     },
     "qwen3-vl-235b": {
         "id": "Qwen/Qwen3-VL-235B-A22B-Instruct",
@@ -91,26 +106,32 @@ MODELS = {
         "memory": 524288,
         "description": "Qwen3-VL 235B — state-of-the-art visual understanding",
         "series": "qwen3",
+        "tensor_parallel_size": 8,
+        "max_model_len": 65536,
     },
     # Qwen3-Omni models (Audio + Video understanding)
     "qwen3-omni-30b-thinking": {
         "id": "Qwen/Qwen3-Omni-30B-A3B-Thinking",
-        "gpu": "A100-80GB",
-        "memory": 65536,
+        "gpu": "A100-80GB:2",
+        "memory": 163840,
         "description": "Qwen3-Omni 30B Thinking — audio+video with reasoning (text output only)",
         "series": "qwen3-omni",
+        "tensor_parallel_size": 2,
+        "max_model_len": 32768,
     },
     "qwen3-omni-30b-instruct": {
         "id": "Qwen/Qwen3-Omni-30B-A3B-Instruct",
-        "gpu": "H100",
-        "memory": 65536,
+        "gpu": "H100:2",
+        "memory": 163840,
         "description": "Qwen3-Omni 30B Instruct — audio+video understanding",
         "series": "qwen3-omni",
+        "tensor_parallel_size": 2,
+        "max_model_len": 32768,
     },
 }
 
 
-hf_secret = modal.Secret.from_name("huggingface-secret", required=False)
+hf_secret = modal.Secret.from_dict({"HF_TOKEN": os.environ.get("HF_TOKEN", "")})
 
 
 @app.cls(
@@ -123,14 +144,14 @@ hf_secret = modal.Secret.from_name("huggingface-secret", required=False)
     memory=65536,
 )
 class QwenVLAnalyzer:
-    """Visual-only video analyzer using Qwen2-VL or Qwen3-VL models."""
+    """Visual-only video analyzer using Qwen2-VL or Qwen3-VL models via vLLM."""
 
     model_name: str = modal.parameter(default="qwen3-vl-8b")
 
     @modal.enter()
     def setup(self):
-        from transformers import AutoModelForVision2Seq, AutoProcessor
-        import torch
+        from vllm import LLM
+        from transformers import AutoProcessor
 
         if self.model_name not in MODELS:
             raise ValueError(f"Model {self.model_name} not found. Available: {list(MODELS.keys())}")
@@ -147,17 +168,22 @@ class QwenVLAnalyzer:
             trust_remote_code=True,
         )
 
-        model_kwargs = {
-            "torch_dtype": torch.bfloat16,
-            "device_map": "auto",
-            "cache_dir": CACHE_DIR,
-            "trust_remote_code": True,
-        }
-        if self.series == "qwen3":
-            model_kwargs["attn_implementation"] = "flash_attention_2"
-
-        self.model = AutoModelForVision2Seq.from_pretrained(self.model_id, **model_kwargs)
-        print(f"Model loaded on {self.model.device} ({self.model.dtype})")
+        tp = model_config.get("tensor_parallel_size", 1)
+        self.llm = LLM(
+            model=self.model_id,
+            download_dir=CACHE_DIR,
+            trust_remote_code=True,
+            gpu_memory_utilization=0.95,
+            tensor_parallel_size=tp,
+            limit_mm_per_prompt={"image": 3, "video": 3},
+            max_num_seqs=8,
+            max_model_len=model_config.get("max_model_len", 32768),
+            dtype="bfloat16",
+            mm_encoder_tp_mode="data",
+            enable_expert_parallel=tp > 1,
+            enforce_eager=True,
+        )
+        print(f"vLLM engine ready (tp={tp})")
 
     @modal.method()
     def analyze_video(
@@ -186,7 +212,7 @@ class QwenVLAnalyzer:
         import requests
         import tempfile
         import cv2
-        import torch
+        from vllm import SamplingParams
         from qwen_vl_utils import process_vision_info
 
         print(f"Downloading video from: {video_url}")
@@ -233,33 +259,34 @@ class QwenVLAnalyzer:
             ]
 
             text = self.processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
-            image_inputs, video_inputs = process_vision_info(messages)
+            image_inputs, video_inputs, video_kwargs = process_vision_info(
+                messages,
+                return_video_kwargs=True,
+            )
             frames_sampled = len(video_inputs[0]) if video_inputs else 0
             print(f"Sampled {frames_sampled} frames at {fps} fps")
 
-            inputs = self.processor(
-                text=[text],
-                images=image_inputs,
-                videos=video_inputs,
-                padding=True,
-                return_tensors="pt",
-            ).to(self.model.device)
+            mm_data = {}
+            if video_inputs:
+                mm_data["video"] = video_inputs
+            if image_inputs:
+                mm_data["image"] = image_inputs
+
+            vllm_input = {
+                "prompt": text,
+                "multi_modal_data": mm_data,
+                "mm_processor_kwargs": video_kwargs,
+            }
+
+            sampling_params = SamplingParams(
+                temperature=temperature,
+                top_p=top_p,
+                max_tokens=max_new_tokens,
+            )
 
             print("Generating analysis...")
-            with torch.no_grad():
-                generated_ids = self.model.generate(
-                    **inputs,
-                    max_new_tokens=max_new_tokens,
-                    do_sample=True,
-                    temperature=temperature,
-                    top_p=top_p,
-                )
-
-            output_text = self.processor.batch_decode(
-                [out[len(inp):] for inp, out in zip(inputs.input_ids, generated_ids)],
-                skip_special_tokens=True,
-                clean_up_tokenization_spaces=False,
-            )[0]
+            outputs = self.llm.generate([vllm_input], sampling_params=sampling_params)
+            output_text = outputs[0].outputs[0].text
 
             return {
                 "prompt": prompt,
@@ -288,7 +315,7 @@ class QwenVLAnalyzer:
 
 
 @app.cls(
-    gpu="A100-80GB",
+    gpu="A100-80GB:2",
     volumes={CACHE_DIR: cache_vol},
     secrets=[hf_secret],
     max_containers=1,
@@ -297,15 +324,14 @@ class QwenVLAnalyzer:
     memory=163840,
 )
 class QwenOmniAnalyzer:
-    """Audio + Video analyzer using Qwen3-Omni models with chunked processing."""
+    """Audio + Video analyzer using Qwen3-Omni models via vLLM with tensor parallelism."""
 
     model_name: str = modal.parameter(default="qwen3-omni-30b-thinking")
-    quantize_8bit: bool = modal.parameter(default=False)
 
     @modal.enter()
     def setup(self):
-        from transformers import Qwen3OmniMoeForConditionalGeneration, Qwen3OmniMoeProcessor
-        import torch
+        from vllm import LLM
+        from transformers import AutoProcessor
 
         if self.model_name not in MODELS:
             raise ValueError(f"Model {self.model_name} not found. Available: {list(MODELS.keys())}")
@@ -315,33 +341,28 @@ class QwenOmniAnalyzer:
         self.series = model_config["series"]
 
         print(f"Loading model: {self.model_id} ({model_config['description']})")
-        print(f"8-bit quantization: {'Enabled' if self.quantize_8bit else 'Disabled'}")
 
-        self.processor = Qwen3OmniMoeProcessor.from_pretrained(
+        self.processor = AutoProcessor.from_pretrained(
             self.model_id,
             cache_dir=CACHE_DIR,
             trust_remote_code=True,
         )
 
-        model_kwargs = {
-            "device_map": "auto",
-            "cache_dir": CACHE_DIR,
-            "trust_remote_code": True,
-            "attn_implementation": "flash_attention_2",
-        }
-        if self.quantize_8bit:
-            model_kwargs["load_in_8bit"] = True
-        else:
-            model_kwargs["torch_dtype"] = torch.bfloat16
-
-        self.model = Qwen3OmniMoeForConditionalGeneration.from_pretrained(self.model_id, **model_kwargs)
-
-        # Disable audio output — text only
-        if hasattr(self.model, "disable_talker"):
-            self.model.disable_talker()
-            print("Talker disabled (text output only)")
-
-        print(f"Model loaded on {self.model.device}")
+        tp = model_config.get("tensor_parallel_size", 2)
+        self.llm = LLM(
+            model=self.model_id,
+            download_dir=CACHE_DIR,
+            trust_remote_code=True,
+            gpu_memory_utilization=0.95,
+            tensor_parallel_size=tp,
+            limit_mm_per_prompt={"image": 3, "video": 3, "audio": 3},
+            max_num_seqs=8,
+            max_model_len=model_config.get("max_model_len", 32768),
+            seed=1234,
+            dtype="bfloat16",
+            enforce_eager=True,
+        )
+        print(f"vLLM engine ready (tp={tp})")
 
     def _extract_video_chunk(self, input_path: str, start_time: float, end_time: float, output_path: str) -> None:
         """Extract a video segment using ffmpeg (stream copy, no re-encoding)."""
@@ -358,7 +379,7 @@ class QwenOmniAnalyzer:
         ]
         subprocess.run(cmd, check=True, capture_output=True)
 
-    def _process_chunk(
+    def _prepare_chunk_input(
         self,
         video_path: str,
         chunk_start: float,
@@ -366,11 +387,12 @@ class QwenOmniAnalyzer:
         prompt: str,
         max_pixels: int,
         fps: float,
-        max_new_tokens: int,
         use_audio_in_video: bool,
-    ) -> Dict[str, Any]:
-        """Run inference on a single video chunk."""
-        import torch
+    ) -> tuple:
+        """Prepare a vLLM input dict for a single video chunk.
+
+        Returns (vllm_input_dict, time_range_str).
+        """
         from qwen_omni_utils import process_mm_info
 
         start_min, start_sec = int(chunk_start // 60), int(chunk_start % 60)
@@ -382,51 +404,32 @@ class QwenOmniAnalyzer:
             "relative to the overall video timeline."
         )
 
-        messages = [
-            {
-                "role": "user",
-                "content": [
-                    {"type": "video", "video": video_path, "max_pixels": max_pixels, "fps": fps},
-                    {"type": "text", "text": chunk_prompt},
-                ],
-            }
+        content = [
+            {"type": "video", "video": video_path, "max_pixels": max_pixels, "fps": fps},
         ]
+        if use_audio_in_video:
+            content.append({"type": "audio", "audio": video_path})
+        content.append({"type": "text", "text": chunk_prompt})
+
+        messages = [{"role": "user", "content": content}]
 
         text = self.processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
-        audios, images, videos = process_mm_info(messages, use_audio_in_video=use_audio_in_video)
+        audios, images, videos = process_mm_info(messages, use_audio_in_video=False)
 
-        inputs = self.processor(
-            text=[text],
-            audio=audios,
-            images=images,
-            videos=videos,
-            padding=True,
-            return_tensors="pt",
-            use_audio_in_video=use_audio_in_video,
-        ).to(self.model.device).to(self.model.dtype)
+        mm_data = {}
+        if videos:
+            mm_data["video"] = videos
+        if images:
+            mm_data["image"] = images
+        if audios:
+            mm_data["audio"] = audios
 
-        with torch.no_grad():
-            result = self.model.generate(
-                **inputs,
-                thinker_max_new_tokens=max_new_tokens,
-                thinker_do_sample=False,
-                return_audio=False,
-                use_audio_in_video=use_audio_in_video,
-            )
+        vllm_input = {
+            "prompt": text,
+            "multi_modal_data": mm_data,
+        }
 
-        # Newer transformers returns str directly; older returns tuple/tensor
-        if isinstance(result, tuple):
-            result = result[0]
-        if isinstance(result, str):
-            output_text = result
-        else:
-            output_text = self.processor.batch_decode(
-                result[:, inputs["input_ids"].shape[1]:],
-                skip_special_tokens=True,
-                clean_up_tokenization_spaces=False,
-            )[0]
-
-        return {"start_time": chunk_start, "end_time": chunk_end, "time_range": time_range, "analysis": output_text}
+        return vllm_input, time_range
 
     @modal.method()
     def analyze_video(
@@ -453,9 +456,9 @@ class QwenOmniAnalyzer:
             max_pixels: Maximum pixels per frame.
             fps: Frames per second to sample.
             max_new_tokens: Maximum tokens to generate.
-            temperature: Sampling temperature.
-            top_p: Top-p sampling parameter.
-            top_k: Top-k sampling parameter.
+            temperature: Sampling temperature (default 0.6 per upstream recommendation).
+            top_p: Top-p sampling parameter (default 0.95 per upstream recommendation).
+            top_k: Top-k sampling parameter (default 20 per upstream recommendation).
             temporal_mode: Enhance prompt to request timestamps.
             use_audio_in_video: Extract and process audio track from video.
             enable_chunking: Split long videos into chunks to avoid OOM.
@@ -466,8 +469,8 @@ class QwenOmniAnalyzer:
         import tempfile
         import cv2
         import math
+        from vllm import SamplingParams
         from qwen_omni_utils import process_mm_info
-        import torch
 
         print(f"Downloading video from: {video_url}")
         response = requests.get(video_url, stream=True, timeout=30)
@@ -477,6 +480,13 @@ class QwenOmniAnalyzer:
             for chunk in response.iter_content(chunk_size=8192):
                 tmp_file.write(chunk)
             video_path = tmp_file.name
+
+        sampling_params = SamplingParams(
+            temperature=temperature,
+            top_p=top_p,
+            top_k=top_k,
+            max_tokens=max_new_tokens,
+        )
 
         try:
             cap = cv2.VideoCapture(video_path)
@@ -495,30 +505,46 @@ class QwenOmniAnalyzer:
             if use_chunking:
                 num_chunks = math.ceil(duration / chunk_duration)
                 print(f"\nChunked processing: {num_chunks} chunks of {chunk_duration}s each")
-                chunk_results = []
 
+                # Phase 1: Extract all chunks with ffmpeg
+                chunk_paths = []
                 for i in range(num_chunks):
                     chunk_start = i * chunk_duration
                     chunk_end = min((i + 1) * chunk_duration, duration)
                     chunk_path = f"/tmp/chunk_{i}.mp4"
-                    print(f"\n--- Chunk {i+1}/{num_chunks} ({chunk_start:.1f}s – {chunk_end:.1f}s) ---")
-
+                    print(f"Extracting chunk {i+1}/{num_chunks} ({chunk_start:.1f}s – {chunk_end:.1f}s)")
                     self._extract_video_chunk(video_path, chunk_start, chunk_end, chunk_path)
-                    try:
-                        result = self._process_chunk(
-                            video_path=chunk_path,
-                            chunk_start=chunk_start,
-                            chunk_end=chunk_end,
-                            prompt=prompt,
-                            max_pixels=max_pixels,
-                            fps=fps,
-                            max_new_tokens=max_new_tokens,
-                            use_audio_in_video=use_audio_in_video,
-                        )
-                        chunk_results.append(result)
-                        print(f"Chunk {i+1}/{num_chunks} complete")
-                    finally:
-                        Path(chunk_path).unlink(missing_ok=True)
+                    chunk_paths.append((chunk_path, chunk_start, chunk_end))
+
+                # Phase 2: Prepare vLLM inputs for each chunk
+                vllm_inputs = []
+                time_ranges = []
+                for chunk_path, chunk_start, chunk_end in chunk_paths:
+                    vllm_input, time_range = self._prepare_chunk_input(
+                        chunk_path, chunk_start, chunk_end, prompt,
+                        max_pixels, fps, use_audio_in_video,
+                    )
+                    vllm_inputs.append(vllm_input)
+                    time_ranges.append(time_range)
+
+                # Phase 3: Batch inference — vLLM processes all chunks concurrently
+                print(f"\nBatch generating {num_chunks} chunks...")
+                outputs = self.llm.generate(vllm_inputs, sampling_params=sampling_params)
+
+                # Collect results
+                chunk_results = []
+                for i, (output, (_, chunk_start, chunk_end)) in enumerate(zip(outputs, chunk_paths)):
+                    chunk_results.append({
+                        "start_time": chunk_start,
+                        "end_time": chunk_end,
+                        "time_range": time_ranges[i],
+                        "analysis": output.outputs[0].text,
+                    })
+                    print(f"Chunk {i+1}/{num_chunks} complete")
+
+                # Cleanup chunk files
+                for chunk_path, _, _ in chunk_paths:
+                    Path(chunk_path).unlink(missing_ok=True)
 
                 combined_analysis = f"=== VIDEO ANALYSIS ({duration:.1f}s, {num_chunks} chunks) ===\n\n"
                 for i, r in enumerate(chunk_results):
@@ -541,7 +567,12 @@ class QwenOmniAnalyzer:
                         "max_pixels": max_pixels,
                         "audio_enabled": use_audio_in_video,
                     },
-                    "generation_config": {"max_new_tokens": max_new_tokens, "temperature": temperature, "top_p": top_p, "top_k": top_k},
+                    "generation_config": {
+                        "max_new_tokens": max_new_tokens,
+                        "temperature": temperature,
+                        "top_p": top_p,
+                        "top_k": top_k,
+                    },
                     "model": self.model_id,
                     "model_series": self.series,
                 }
@@ -559,54 +590,50 @@ class QwenOmniAnalyzer:
                 else:
                     final_prompt = prompt
 
-                messages = [
-                    {
-                        "role": "user",
-                        "content": [
-                            {"type": "video", "video": video_path, "max_pixels": max_pixels, "fps": fps},
-                            {"type": "text", "text": final_prompt},
-                        ],
-                    }
+                content = [
+                    {"type": "video", "video": video_path, "max_pixels": max_pixels, "fps": fps},
                 ]
+                if use_audio_in_video:
+                    content.append({"type": "audio", "audio": video_path})
+                content.append({"type": "text", "text": final_prompt})
+
+                messages = [{"role": "user", "content": content}]
 
                 text = self.processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
-                audios, images, videos = process_mm_info(messages, use_audio_in_video=use_audio_in_video)
+                audios, images, videos = process_mm_info(messages, use_audio_in_video=False)
 
                 frames_sampled = len(videos[0]) if videos else 0
                 has_audio = audios is not None and len(audios) > 0
                 print(f"Sampled {frames_sampled} frames | Audio extracted: {has_audio}")
+                if has_audio:
+                    for i, a in enumerate(audios):
+                        if isinstance(a, tuple):
+                            print(f"  audio[{i}]: shape={a[0].shape}, sr={a[1]}, dtype={a[0].dtype}")
+                        else:
+                            import numpy as np
+                            arr = np.asarray(a)
+                            print(f"  audio[{i}]: shape={arr.shape}, dtype={arr.dtype}")
+                # Show prompt tokens for audio/video placeholders
+                audio_tokens = text.count("<|audio_pad|>") + text.count("<|AUDIO|>")
+                video_tokens = text.count("<|video_pad|>") + text.count("<|VIDEO|>")
+                print(f"Prompt tokens — video_pad: {video_tokens}, audio_pad: {audio_tokens}")
 
-                inputs = self.processor(
-                    text=[text],
-                    audio=audios,
-                    images=images,
-                    videos=videos,
-                    padding=True,
-                    return_tensors="pt",
-                    use_audio_in_video=use_audio_in_video,
-                ).to(self.model.device).to(self.model.dtype)
+                mm_data = {}
+                if videos:
+                    mm_data["video"] = videos
+                if images:
+                    mm_data["image"] = images
+                if audios:
+                    mm_data["audio"] = audios
+
+                vllm_input = {
+                    "prompt": text,
+                    "multi_modal_data": mm_data,
+                }
 
                 print("Generating analysis...")
-                with torch.no_grad():
-                    result = self.model.generate(
-                        **inputs,
-                        thinker_max_new_tokens=max_new_tokens,
-                        thinker_do_sample=False,
-                        return_audio=False,
-                        use_audio_in_video=use_audio_in_video,
-                    )
-
-                # Newer transformers returns str directly; older returns tuple/tensor
-                if isinstance(result, tuple):
-                    result = result[0]
-                if isinstance(result, str):
-                    output_text = result
-                else:
-                    output_text = self.processor.batch_decode(
-                        result[:, inputs["input_ids"].shape[1]:],
-                        skip_special_tokens=True,
-                        clean_up_tokenization_spaces=False,
-                    )[0]
+                outputs = self.llm.generate([vllm_input], sampling_params=sampling_params)
+                output_text = outputs[0].outputs[0].text
 
                 return {
                     "prompt": prompt,
@@ -624,7 +651,12 @@ class QwenOmniAnalyzer:
                         "audio_enabled": use_audio_in_video,
                         "audio_extracted": has_audio,
                     },
-                    "generation_config": {"max_new_tokens": max_new_tokens, "temperature": temperature, "top_p": top_p, "top_k": top_k},
+                    "generation_config": {
+                        "max_new_tokens": max_new_tokens,
+                        "temperature": temperature,
+                        "top_p": top_p,
+                        "top_k": top_k,
+                    },
                     "model": self.model_id,
                     "model_series": self.series,
                 }
@@ -642,7 +674,6 @@ def main(
     max_pixels: int = 360 * 420,
     temperature: float = 0.7,
     top_p: float = 0.9,
-    quantize_8bit: bool = False,
 ):
     """Run video analysis from the command line.
 
@@ -650,11 +681,8 @@ def main(
         # Visual analysis with Qwen3-VL
         modal run video-analyser.py --video-url "https://example.com/video.mp4"
 
-        # Audio + visual with Qwen3-Omni
+        # Audio + visual with Qwen3-Omni (uses 2x A100-80GB with tensor parallelism)
         modal run video-analyser.py --model qwen3-omni-30b-thinking --video-url "https://example.com/video.mp4"
-
-        # Qwen3-Omni with 8-bit quantization (lower memory)
-        modal run video-analyser.py --model qwen3-omni-30b-thinking --quantize-8bit --video-url "https://example.com/video.mp4"
 
         # Custom prompt
         modal run video-analyser.py \\
@@ -668,8 +696,12 @@ def main(
 
     if prompt is None:
         prompt = (
-            "Describe what is happening in this video in detail. "
-            "Transcribe step by step so the output can be used as lecture notes."
+            "Analyze BOTH the visual content AND the audio/speech in this video. "
+            "For each time segment, describe what is shown on screen AND quote any "
+            "spoken dialogue verbatim (use quotation marks for direct speech). "
+            "If someone is talking, transcribe their exact words — do not just say "
+            "'the person speaks'. Break the output into 5% steps of the total video "
+            "length (e.g. for a 60s video: 0:00–0:03, 0:03–0:06, etc)."
         )
 
     if model not in MODELS:
@@ -687,8 +719,16 @@ def main(
     print(f"Series   : {model_config['series'].upper()}")
     print("=" * 70 + "\n")
 
+    # Guard: QwenVLAnalyzer is hardcoded to single A100; multi-GPU VL models need their own class
+    if model_config["series"] != "qwen3-omni" and model_config.get("tensor_parallel_size", 1) > 1:
+        raise ValueError(
+            f"Model {model} requires {model_config['gpu']} (tp={model_config['tensor_parallel_size']}), "
+            f"but QwenVLAnalyzer only supports single-GPU models. "
+            f"Multi-GPU VL support is not yet implemented."
+        )
+
     if model_config["series"] == "qwen3-omni":
-        analyzer = QwenOmniAnalyzer(model_name=model, quantize_8bit=quantize_8bit)
+        analyzer = QwenOmniAnalyzer(model_name=model)
         result = analyzer.analyze_video.remote(
             video_url=video_url,
             prompt=prompt,
@@ -783,6 +823,11 @@ def fastapi_app():
             raise HTTPException(status_code=400, detail=f"Unknown model: {request.model}. Available: {list(MODELS.keys())}")
         try:
             cfg = MODELS[request.model]
+            if cfg["series"] != "qwen3-omni" and cfg.get("tensor_parallel_size", 1) > 1:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Model {request.model} requires multi-GPU ({cfg['gpu']}), not yet supported for VL models.",
+                )
             if cfg["series"] == "qwen3-omni":
                 analyzer = QwenOmniAnalyzer(model_name=request.model)
                 return analyzer.analyze_video.remote(
