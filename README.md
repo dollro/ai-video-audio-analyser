@@ -13,6 +13,30 @@ Both scripts run entirely on Modal's serverless GPU infrastructure. You don't ma
 
 ---
 
+## Using uv
+
+This project uses [uv](https://docs.astral.sh/uv/) to manage Python dependencies and the virtual environment.
+
+```bash
+# Install uv (if you don't have it)
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# Install dependencies (creates .venv automatically)
+uv sync
+
+# Run any command inside the venv — no manual activation needed
+uv run modal run video-analyser.py --video-url "..."
+uv run modal deploy video-analyser.py
+
+# Or activate the venv manually if you prefer
+source .venv/bin/activate
+modal run video-analyser.py --video-url "..."
+```
+
+> `uv run` is the recommended way — it ensures you're always using the correct venv without needing to activate/deactivate.
+
+---
+
 ## Why Modal?
 
 - **No GPU required locally** — all heavy lifting runs on A100/H100 instances spun up on demand

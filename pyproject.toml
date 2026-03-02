@@ -5,6 +5,7 @@ description = "Serverless AI pipelines for video and audio analysis on Modal"
 requires-python = ">=3.12"
 dependencies = [
     "modal",
+    "python-dotenv",
     "requests",
     "numpy",
 ]

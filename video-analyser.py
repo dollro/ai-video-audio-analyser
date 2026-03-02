@@ -1,4 +1,3 @@
-import os
 import modal
 import json
 from pathlib import Path
@@ -131,7 +130,7 @@ MODELS = {
 }
 
 
-hf_secret = modal.Secret.from_dict({"HF_TOKEN": os.environ.get("HF_TOKEN", "")})
+hf_secret = modal.Secret.from_dotenv()
 
 
 @app.cls(

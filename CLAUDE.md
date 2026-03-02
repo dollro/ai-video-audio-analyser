@@ -16,7 +16,7 @@ Neither script runs locally. All computation happens on Modal's cloud GPU instan
 | Base image | `nvidia/cuda:12.8.0-devel-ubuntu22.04` | `modal.Image.debian_slim` |
 | Python | 3.12 | 3.12 |
 | CUDA | 12.8 | (bundled via PyTorch pip) |
-| PyTorch | 2.7.0 (cu128) | 2.7.0 |
+| PyTorch | 2.7.0 (cu128) | 2.8.0 (cu128) |
 | vLLM | 0.13.0 | — |
 | flash-attn | 2.8.3 (compiled from source) | — |
 | whisperx | — | 3.8.1 |

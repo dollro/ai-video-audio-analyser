@@ -6,13 +6,19 @@ image = (
     modal.Image.debian_slim(python_version="3.12")
     .apt_install("git", "ffmpeg")
     .uv_pip_install(
-        "torch==2.7.0",
-        "torchaudio==2.7.0",
+        "torch==2.8.0",
+        "torchaudio==2.8.0",
+        index_url="https://download.pytorch.org/whl/cu128",
         uv_version="0.10.3",
     )
     .uv_pip_install(
         "whisperx==3.8.1",
         "ffmpeg-python",
+        # Pin torch + torchaudio here too — uv resolves each step independently,
+        # and pyannote-audio 4.x pins torch==2.8.0 + torchcodec==0.7.0
+        "torch==2.8.0",
+        "torchaudio==2.8.0",
+        "torchcodec==0.7.0",
         uv_version="0.10.3",
     )
 )
@@ -25,7 +31,7 @@ cache_vol = modal.Volume.from_name("whisper-cache", create_if_missing=True)
 
 # HuggingFace token — needed for speaker diarization.
 # Set HF_TOKEN in your environment, or create a Modal secret named "huggingface-secret".
-hf_secret = modal.Secret.from_dict({"HF_TOKEN": os.environ.get("HF_TOKEN", "")})
+hf_secret = modal.Secret.from_dotenv()
 
 
 @app.cls(
@@ -117,7 +123,19 @@ class WhisperXModel:
             )
 
         print(f"Diarizing (min_speakers={min_speakers}, max_speakers={max_speakers})...")
-        diarize_model = whisperx.diarize.DiarizationPipeline(use_auth_token=hf_token, device=self.device)
+        try:
+            diarize_model = whisperx.diarize.DiarizationPipeline(token=hf_token, device=self.device)
+        except Exception as exc:
+            if "gated" in str(exc).lower() or "403" in str(exc):
+                raise RuntimeError(
+                    "Access denied to the pyannote diarization model. "
+                    "Your HuggingFace token must belong to an account that has accepted the gated-model terms.\n\n"
+                    "  1. Visit https://huggingface.co/pyannote/speaker-diarization-community-1 and accept the conditions\n"
+                    "  2. Visit https://huggingface.co/pyannote/segmentation-3.0 and accept the conditions\n"
+                    "  3. Ensure HF_TOKEN in your .env file belongs to the same account\n\n"
+                    "Then re-run the command."
+                ) from exc
+            raise
         diarize_segments = diarize_model(audio, min_speakers=min_speakers, max_speakers=max_speakers)
         result_dia = whisperx.assign_word_speakers(diarize_segments, result_align)
 
