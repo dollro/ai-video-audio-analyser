@@ -78,9 +78,8 @@ Speaker diarization (identifying *who* said what) is powered by [pyannote.audio]
 **How to get the token:**
 
 1. Create a free account at [huggingface.co](https://huggingface.co/join)
-2. Go to [huggingface.co/pyannote/speaker-diarization-3.1](https://huggingface.co/pyannote/speaker-diarization-3.1) and accept the license
-3. Also accept the license at [huggingface.co/pyannote/segmentation-3.0](https://huggingface.co/pyannote/segmentation-3.0)
-4. Generate an access token at [huggingface.co/settings/tokens](https://huggingface.co/settings/tokens) (a `read` token is sufficient)
+2. Go to [huggingface.co/pyannote/speaker-diarization-community-1](https://huggingface.co/pyannote/speaker-diarization-community-1) and accept the license — this is the model whisperx 3.8.x actually loads. Accepting `speaker-diarization-3.1` (an older pipeline) instead does nothing; diarization will silently return `SPEAKER_UNKNOWN` for every segment. See the diarization gotcha in `CLAUDE.md`.
+3. Generate an access token at [huggingface.co/settings/tokens](https://huggingface.co/settings/tokens) (a `read` token is sufficient)
 
 **Then provide it via one of:**
 
