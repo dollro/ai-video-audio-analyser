@@ -440,6 +440,49 @@ class QwenOmniAnalyzer:
         ]
         subprocess.run(cmd, check=True, capture_output=True)
 
+    def _extract_audio_wav(
+        self,
+        source_path: str,
+        out_path: str,
+        start: float = None,
+        duration: float = None,
+        context: str = "",
+    ) -> Optional[str]:
+        """Extract a 16 kHz mono PCM WAV audio track from a media file via ffmpeg.
+
+        librosa/soundfile (used by qwen_omni_utils.process_mm_info) can't decode
+        compressed containers like .mp4 directly — modern librosa dropped the
+        audioread/ffmpeg fallback that used to paper over this. So audio must be
+        extracted to a raw WAV file before being passed as a standalone "audio"
+        content item.
+
+        Args:
+            source_path: Media file to extract audio from.
+            out_path: Where to write the extracted WAV.
+            start: Optional start offset in seconds (ffmpeg -ss).
+            duration: Optional duration in seconds (ffmpeg -t).
+            context: Extra text appended to the warning message on failure,
+                e.g. " for chunk 30s–60s".
+
+        Returns the output path, or None if ffmpeg fails (a warning is logged).
+        """
+        import subprocess
+
+        cmd = ["ffmpeg", "-y"]
+        if start is not None:
+            cmd += ["-ss", str(start)]
+        cmd += ["-i", source_path]
+        if duration is not None:
+            cmd += ["-t", str(duration)]
+        cmd += ["-vn", "-acodec", "pcm_s16le", "-ar", "16000", "-ac", "1", out_path]
+
+        result = subprocess.run(cmd, capture_output=True)
+        if result.returncode != 0:
+            print(f"Warning: audio extraction failed{context}: "
+                  f"{result.stderr.decode()[-300:]}")
+            return None
+        return out_path
+
     def _prepare_chunk_input(
         self,
         video_path: str,
@@ -467,21 +510,16 @@ class QwenOmniAnalyzer:
         )
 
         # Extract audio to .wav from the original video (chunks may lack audio streams)
-        # librosa/soundfile also can't decode .mp4 containers directly
         audio_path = None
         if use_audio_in_video:
-            import subprocess
             audio_src = original_video_path or video_path
-            audio_path = video_path.rsplit(".", 1)[0] + ".wav"
-            cmd = ["ffmpeg", "-y", "-ss", str(chunk_start),
-                   "-i", audio_src, "-t", str(chunk_end - chunk_start),
-                   "-vn", "-acodec", "pcm_s16le", "-ar", "16000", "-ac", "1",
-                   audio_path]
-            result = subprocess.run(cmd, capture_output=True)
-            if result.returncode != 0:
-                print(f"Warning: audio extraction failed for chunk {chunk_start:.0f}s–{chunk_end:.0f}s: "
-                      f"{result.stderr.decode()[-300:]}")
-                audio_path = None
+            audio_path = self._extract_audio_wav(
+                audio_src,
+                video_path.rsplit(".", 1)[0] + ".wav",
+                start=chunk_start,
+                duration=chunk_end - chunk_start,
+                context=f" for chunk {chunk_start:.0f}s–{chunk_end:.0f}s",
+            )
 
         content = [
             {"type": "video", "video": video_path, "max_pixels": max_pixels, "fps": fps},
@@ -692,7 +730,13 @@ class QwenOmniAnalyzer:
                     {"type": "video", "video": video_path, "max_pixels": max_pixels, "fps": fps},
                 ]
                 if use_audio_in_video:
-                    content.append({"type": "audio", "audio": video_path})
+                    # librosa/soundfile can't decode the .mp4 container directly —
+                    # extract to WAV first (see _extract_audio_wav).
+                    audio_path = self._extract_audio_wav(
+                        video_path, str(Path(tmp_dir) / "audio.wav"),
+                    )
+                    if audio_path:
+                        content.append({"type": "audio", "audio": audio_path})
                 content.append({"type": "text", "text": final_prompt})
 
                 messages = [{"role": "user", "content": content}]
