@@ -12,12 +12,14 @@ image = (
         uv_version="0.10.3",
     )
     .uv_pip_install(
-        "whisperx==3.8.1",
+        "whisperx==3.8.6",
         "ffmpeg-python",
-        # Pin torch + torchaudio here too — uv resolves each step independently,
-        # and pyannote-audio 4.x pins torch==2.8.0 + torchcodec==0.7.0
+        # Pin torch + torchaudio + torchvision here too — uv resolves each step
+        # independently, and whisperx 3.8.6 requires torch~=2.8.0, torchaudio~=2.8.0,
+        # torchvision~=0.23.0 and torchcodec>=0.6.0,<0.8.0 (pyannote-audio 4.x).
         "torch==2.8.0",
         "torchaudio==2.8.0",
+        "torchvision==0.23.0",
         "torchcodec==0.7.0",
         uv_version="0.10.3",
     )
