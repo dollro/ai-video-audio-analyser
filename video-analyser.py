@@ -294,10 +294,23 @@ class QwenVLAnalyzer:
             if image_inputs:
                 mm_data["image"] = image_inputs
 
+            # qwen-vl-utils returns "fps" as a per-video list (e.g. [0.996]) since it
+            # supports batches of videos with independent sampling rates. transformers
+            # 4.x accepted that list verbatim in VideosKwargs, but transformers 5.x
+            # validates processor kwargs with huggingface_hub strict dataclasses, which
+            # require fps to be int | float | None and rejects the list with
+            # StrictDataclassFieldValidationError. This path always processes exactly
+            # one video, so unwrap a single-element list to the scalar the processor
+            # needs; leave empty/multi-video lists untouched rather than guessing.
+            mm_processor_kwargs = dict(video_kwargs)
+            kwargs_fps = mm_processor_kwargs.get("fps")
+            if isinstance(kwargs_fps, list) and len(kwargs_fps) == 1:
+                mm_processor_kwargs["fps"] = kwargs_fps[0]
+
             vllm_input = {
                 "prompt": text,
                 "multi_modal_data": mm_data,
-                "mm_processor_kwargs": video_kwargs,
+                "mm_processor_kwargs": mm_processor_kwargs,
             }
 
             sampling_params = SamplingParams(
