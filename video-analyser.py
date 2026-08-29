@@ -300,8 +300,11 @@ class QwenVLAnalyzer:
             if use_video_metadata:
                 # Each video_inputs entry is (frames, metadata); len() on the tuple
                 # itself would be 2, not the frame count, so unpack before counting.
-                frames, video_meta = video_inputs[0] if video_inputs else (None, None)
-                frames_sampled = video_meta.get("total_num_frames", len(frames)) if video_meta else 0
+                # metadata["total_num_frames"] describes the SOURCE video, not the
+                # sampling result -- len(frames) is the actual number of frames handed
+                # to the model, matching what the qwen2 branch below reports.
+                frames, _video_meta = video_inputs[0] if video_inputs else (None, None)
+                frames_sampled = len(frames) if frames is not None else 0
             else:
                 frames_sampled = len(video_inputs[0]) if video_inputs else 0
             print(f"Sampled {frames_sampled} frames at {fps} fps")
