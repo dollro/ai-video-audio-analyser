@@ -280,12 +280,30 @@ class QwenVLAnalyzer:
                 }
             ]
 
+            # vLLM 0.27's parser sets video_needs_metadata=True for Qwen3-VL, so
+            # multi_modal_data["video"] entries must be (frames, metadata) tuples, not
+            # bare frame arrays -- Qwen2-VL has no such requirement. qwen-vl-utils
+            # 0.0.14 draws that exact line: return_video_metadata=True switches video
+            # entries to (frames, metadata) tuples AND stops putting "fps" in
+            # video_kwargs (fps moves inside each video's metadata instead); leaving it
+            # False is the library's own "BC for qwen2.5vl" branch, which is the shape
+            # already verified working end-to-end for Qwen2-VL. So request metadata
+            # only for the qwen3 series.
+            use_video_metadata = self.series == "qwen3"
             text = self.processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
             image_inputs, video_inputs, video_kwargs = process_vision_info(
                 messages,
                 return_video_kwargs=True,
+                return_video_metadata=use_video_metadata,
             )
-            frames_sampled = len(video_inputs[0]) if video_inputs else 0
+
+            if use_video_metadata:
+                # Each video_inputs entry is (frames, metadata); len() on the tuple
+                # itself would be 2, not the frame count, so unpack before counting.
+                frames, video_meta = video_inputs[0] if video_inputs else (None, None)
+                frames_sampled = video_meta.get("total_num_frames", len(frames)) if video_meta else 0
+            else:
+                frames_sampled = len(video_inputs[0]) if video_inputs else 0
             print(f"Sampled {frames_sampled} frames at {fps} fps")
 
             mm_data = {}
@@ -294,14 +312,18 @@ class QwenVLAnalyzer:
             if image_inputs:
                 mm_data["image"] = image_inputs
 
-            # qwen-vl-utils returns "fps" as a per-video list (e.g. [0.996]) since it
-            # supports batches of videos with independent sampling rates. transformers
-            # 4.x accepted that list verbatim in VideosKwargs, but transformers 5.x
-            # validates processor kwargs with huggingface_hub strict dataclasses, which
-            # require fps to be int | float | None and rejects the list with
+            # On the qwen2 (BC) path, qwen-vl-utils returns "fps" as a per-video list
+            # (e.g. [0.996]) since it supports batches of videos with independent
+            # sampling rates. transformers 4.x accepted that list verbatim in
+            # VideosKwargs, but transformers 5.x validates processor kwargs with
+            # huggingface_hub strict dataclasses, which require fps to be
+            # int | float | None and rejects the list with
             # StrictDataclassFieldValidationError. This path always processes exactly
             # one video, so unwrap a single-element list to the scalar the processor
-            # needs; leave empty/multi-video lists untouched rather than guessing.
+            # needs; leave empty/multi-video lists untouched rather than guessing. On
+            # the qwen3 (use_video_metadata) path video_kwargs never has an "fps" key
+            # at all -- it travels inside each video's metadata instead -- so this
+            # block is simply a no-op there, not dead code left over from the qwen2 fix.
             mm_processor_kwargs = dict(video_kwargs)
             kwargs_fps = mm_processor_kwargs.get("fps")
             if isinstance(kwargs_fps, list) and len(kwargs_fps) == 1:
