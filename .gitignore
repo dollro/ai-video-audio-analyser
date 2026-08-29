@@ -29,3 +29,15 @@ Thumbs.db
 
 # Modal
 .modal/
+
+# Downloaded media and scratch artifacts
+download
+wget-log*
+*.aac
+*.mp3
+*.mp4
+*.wav
+transcript*.json
+video_analysis_*.json
+backup*.json
+IQ*nav=*
