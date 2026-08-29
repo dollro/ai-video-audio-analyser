@@ -13,20 +13,19 @@ Neither script runs locally. All computation happens on Modal's cloud GPU instan
 
 | Component | video-analyser | audio-transcript |
 |-----------|---------------|-----------------|
-| Base image | `nvidia/cuda:12.8.0-devel-ubuntu22.04` | `modal.Image.debian_slim` |
+| Base image | `nvidia/cuda:12.9.0-devel-ubuntu22.04` | `modal.Image.debian_slim` |
 | Python | 3.12 | 3.12 |
-| CUDA | 12.8 | (bundled via PyTorch pip) |
-| PyTorch | 2.7.0 (cu128) | 2.8.0 (cu128) |
-| vLLM | 0.13.0 | — |
-| flash-attn | 2.8.3 (compiled from source) | — |
-| whisperx | — | 3.8.1 |
+| CUDA | 12.9 | (bundled via PyTorch pip) |
+| PyTorch | 2.13.0 (via vLLM, not pinned) | 2.8.0 (cu128) |
+| vLLM | 0.27.1 | — |
+| whisperx | — | 3.8.6 |
 | Installer | `uv_pip_install` | `uv_pip_install` |
 
 ## How to run
 
 ```bash
 # Video analysis (--video-url is required)
-modal run video-analyser.py --video-url "http://commondatastorage.googleapis.com/gtv-videos-bucket/sample/WeAreGoingOnBullrun.mp4"
+modal run video-analyser.py --video-url "https://media.w3.org/2010/05/sintel/trailer.mp4"
 
 # Audio + visual with Qwen3-Omni
 modal run video-analyser.py --model qwen3-omni-30b-thinking --video-url "https://example.com/video.mp4"
@@ -124,3 +123,5 @@ The `hf_secret` in `audio-transcript.py` is `required=False` — the script will
 - **vLLM shutdown noise** — when Modal tears down the container, vLLM's tensor-parallel workers log `KeyboardInterrupt` and "Engine core proc died unexpectedly". This is cosmetic — all work completes before shutdown. Caused by a race between Modal's container lifecycle and vLLM's multiprocess executor cleanup.
 - **`enforce_eager=True`** — disables `torch.compile` and CUDA graph capture in vLLM, cutting cold-start time from ~4 min to ~1 min. The ~10-20% per-token generation slowdown is negligible for multimodal workloads where video/audio prefill dominates.
 - WhisperX `large-v2` uses `float16` compute type; change to `int8` if GPU memory is tight.
+- **flash-attn is deliberately not installed** — vLLM 0.27.1 bundles its own `vllm-flash-attn`, and no transformers attention path is used in `video-analyser.py`, so a separate flash-attn build is unnecessary.
+- **Diarization silently degrades** — whisperx 3.8.x uses `pyannote/speaker-diarization-community-1`. If the HF account behind `HF_TOKEN` has not accepted *that* model's conditions, diarization returns `SPEAKER_UNKNOWN` for every segment instead of raising. Accepting `speaker-diarization-3.1` does nothing.

@@ -140,17 +140,17 @@ The models fall into two families with fundamentally different capabilities:
 ```bash
 # Visual analysis with Qwen3-VL 8B (default model)
 modal run video-analyser.py \
-  --video-url "http://commondatastorage.googleapis.com/gtv-videos-bucket/sample/WeAreGoingOnBullrun.mp4"
+  --video-url "https://media.w3.org/2010/05/sintel/trailer.mp4"
 
 # Custom prompt
 modal run video-analyser.py \
-  --video-url "http://commondatastorage.googleapis.com/gtv-videos-bucket/sample/WeAreGoingOnBullrun.mp4" \
+  --video-url "https://media.w3.org/2010/05/sintel/trailer.mp4" \
   --prompt "Describe what happens in this video step by step."
 
 # Use Qwen3-Omni for audio + visual understanding
 modal run video-analyser.py \
   --model qwen3-omni-30b-instruct \
-  --video-url "http://commondatastorage.googleapis.com/gtv-videos-bucket/sample/WeAreGoingOnBullrun.mp4" \
+  --video-url "https://media.w3.org/2010/05/sintel/trailer.mp4" \
   --prompt "Describe what is said and what is shown."
 
 # Sample more frames (higher quality, slower)
@@ -162,7 +162,7 @@ modal run video-analyser.py --fps 2.0
 Results are saved to `video_analysis_<model>.json` and printed to the terminal.
 
 <details>
-<summary><b>Example output</b> — Qwen3-Omni analyzing the <a href="http://commondatastorage.googleapis.com/gtv-videos-bucket/sample/WeAreGoingOnBullrun.mp4">Bullrun sample video</a> (47s, audio + visual)</summary>
+<summary><b>Example output</b> — Qwen3-Omni analyzing the Bullrun sample video (47s, audio + visual) — this sample is no longer publicly available; the output below is kept as a historical example</summary>
 
 ```
 Model    : Qwen/Qwen3-Omni-30B-A3B-Thinking (QWEN3-OMNI)
@@ -270,7 +270,7 @@ modal deploy video-analyser.py
 curl -X POST "https://your-app.modal.run/analyze" \
   -H "Content-Type: application/json" \
   -d '{
-    "video_url": "http://commondatastorage.googleapis.com/gtv-videos-bucket/sample/WeAreGoingOnBullrun.mp4",
+    "video_url": "https://media.w3.org/2010/05/sintel/trailer.mp4",
     "prompt": "What happens in this video?",
     "model": "qwen3-vl-8b",
     "fps": 1.0
