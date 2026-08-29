@@ -12,12 +12,14 @@ image = (
         uv_version="0.10.3",
     )
     .uv_pip_install(
-        "whisperx==3.8.1",
+        "whisperx==3.8.6",
         "ffmpeg-python",
-        # Pin torch + torchaudio here too — uv resolves each step independently,
-        # and pyannote-audio 4.x pins torch==2.8.0 + torchcodec==0.7.0
+        # Pin torch + torchaudio + torchvision here too — uv resolves each step
+        # independently, and whisperx 3.8.6 requires torch~=2.8.0, torchaudio~=2.8.0,
+        # torchvision~=0.23.0 and torchcodec>=0.6.0,<0.8.0 (pyannote-audio 4.x).
         "torch==2.8.0",
         "torchaudio==2.8.0",
+        "torchvision==0.23.0",
         "torchcodec==0.7.0",
         uv_version="0.10.3",
     )
@@ -29,8 +31,7 @@ GPU_CONFIG = "A100"
 CACHE_DIR = "/cache"
 cache_vol = modal.Volume.from_name("whisper-cache", create_if_missing=True)
 
-# HuggingFace token — needed for speaker diarization.
-# Set HF_TOKEN in your environment, or create a Modal secret named "huggingface-secret".
+# Load secrets from .env file in the project directory at run/deploy time.
 hf_secret = modal.Secret.from_dotenv()
 
 
@@ -119,7 +120,7 @@ class WhisperXModel:
         if not hf_token:
             raise ValueError(
                 "HF_TOKEN is required for speaker diarization. "
-                "Set it via a Modal secret named 'huggingface-secret' or as an environment variable."
+                "Set HF_TOKEN=... in the .env file in your project directory."
             )
 
         print(f"Diarizing (min_speakers={min_speakers}, max_speakers={max_speakers})...")
@@ -131,8 +132,7 @@ class WhisperXModel:
                     "Access denied to the pyannote diarization model. "
                     "Your HuggingFace token must belong to an account that has accepted the gated-model terms.\n\n"
                     "  1. Visit https://huggingface.co/pyannote/speaker-diarization-community-1 and accept the conditions\n"
-                    "  2. Visit https://huggingface.co/pyannote/segmentation-3.0 and accept the conditions\n"
-                    "  3. Ensure HF_TOKEN in your .env file belongs to the same account\n\n"
+                    "  2. Ensure HF_TOKEN in your .env file belongs to the same account\n\n"
                     "Then re-run the command."
                 ) from exc
             raise

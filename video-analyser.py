@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Optional, Dict, Any
 
 # Configure CUDA environment
-cuda_version = "12.8.0"
+cuda_version = "12.9.0"
 flavor = "devel"
 operating_sys = "ubuntu22.04"
 tag = f"{cuda_version}-{flavor}-{operating_sys}"
@@ -13,23 +13,16 @@ image = (
     modal.Image.from_registry(f"nvidia/cuda:{tag}", add_python="3.12")
     .entrypoint([])
     .apt_install("git", "ffmpeg")
-    # Install PyTorch with CUDA 12.8
-    .uv_pip_install(
-        "torch==2.7.0",
-        "torchvision==0.22.0",
-        "torchaudio==2.7.0",
-        index_url="https://download.pytorch.org/whl/cu128",
-        uv_version="0.10.3",
-    )
     .uv_pip_install(
         "fastapi[standard]",
         "uvicorn[standard]",
         "pydantic>=2.0",
-        "transformers>=4.48.0",
+        "transformers>=5.5.3",
         "accelerate>=0.26.0",
         "bitsandbytes>=0.44.0",
         "qwen-vl-utils>=0.0.14",
         "qwen-omni-utils",
+        "audioread",
         "huggingface_hub[hf_transfer]",
         "safetensors",
         "tokenizers",
@@ -44,19 +37,11 @@ image = (
         "pyyaml",
         uv_version="0.10.3",
     )
-    # Install vLLM (may adjust PyTorch internals)
-    .uv_pip_install("vllm==0.13.0", uv_version="0.10.3")
-    # Build deps + compile flash-attn AFTER vLLM so it links against the final PyTorch ABI
-    .uv_pip_install("packaging", "wheel", "setuptools", "ninja", "psutil", uv_version="0.10.3")
-    .run_commands(
-        "pip install flash-attn==2.8.3 --no-build-isolation"
-    )
-    # Re-install hf_transfer after vLLM (vLLM may override huggingface_hub without the extra)
-    .uv_pip_install("hf_transfer", uv_version="0.10.3")
+    # Install vLLM last so its exact torch/transformers pins win
+    .uv_pip_install("vllm==0.27.1", uv_version="0.10.3")
     .env({
-        "HF_HUB_ENABLE_HF_TRANSFER": "1",
+        "HF_XET_HIGH_PERFORMANCE": "1",
         "HF_HOME": "/cache/huggingface",
-        "TORCH_CUDA_ARCH_LIST": "8.0;8.6;8.9;9.0",
         # Force spawn (not fork) for vLLM V1 tensor-parallel workers —
         # pynvml calls cuInit() before fork, which breaks CUDA in children.
         "VLLM_WORKER_MULTIPROC_METHOD": "spawn",
@@ -120,7 +105,7 @@ MODELS = {
     },
     "qwen3-omni-30b-instruct": {
         "id": "Qwen/Qwen3-Omni-30B-A3B-Instruct",
-        "gpu": "H100:2",
+        "gpu": "A100-80GB:2",
         "memory": 163840,
         "description": "Qwen3-Omni 30B Instruct — audio+video understanding",
         "series": "qwen3-omni",
@@ -128,6 +113,40 @@ MODELS = {
         "max_model_len": 32768,
     },
 }
+
+
+@app.function(gpu="L4", timeout=600)
+def verify_env():
+    """Assert the image resolved to the intended inference stack.
+
+    Cheap gate before any expensive GPU smoke test — a resolution mistake in the
+    image definition surfaces here in a couple of minutes instead of on an A100.
+    """
+    import torch
+    import transformers
+    import vllm
+    from packaging.version import Version
+
+    versions = {
+        "vllm": vllm.__version__,
+        "torch": torch.__version__,
+        "transformers": transformers.__version__,
+        "cuda": torch.version.cuda,
+    }
+    for name, value in versions.items():
+        print(f"{name}: {value}")
+
+    assert Version(vllm.__version__) >= Version("0.27.1"), versions
+    assert Version(torch.__version__.split("+")[0]) >= Version("2.13.0"), versions
+    assert Version(transformers.__version__) >= Version("5.5.3"), versions
+    assert torch.cuda.is_available(), "CUDA not available in container"
+
+    # The multimodal helpers are imported inside the analyzer methods; confirm
+    # here that they still import against the resolved transformers version.
+    from qwen_omni_utils import process_mm_info  # noqa: F401
+    from qwen_vl_utils import process_vision_info  # noqa: F401
+
+    print("environment OK")
 
 
 hf_secret = modal.Secret.from_dotenv()
@@ -211,6 +230,7 @@ class QwenVLAnalyzer:
         import requests
         import tempfile
         import cv2
+        from urllib.parse import urlparse
         from vllm import SamplingParams
         from qwen_vl_utils import process_vision_info
 
@@ -218,10 +238,12 @@ class QwenVLAnalyzer:
         response = requests.get(video_url, stream=True, timeout=30)
         response.raise_for_status()
 
-        with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as tmp_file:
+        filename = Path(urlparse(video_url).path).name or "video.mp4"
+        tmp_dir = tempfile.mkdtemp()
+        video_path = str(Path(tmp_dir) / filename)
+        with open(video_path, "wb") as tmp_file:
             for chunk in response.iter_content(chunk_size=8192):
                 tmp_file.write(chunk)
-            video_path = tmp_file.name
 
         try:
             cap = cv2.VideoCapture(video_path)
@@ -240,7 +262,7 @@ class QwenVLAnalyzer:
                 duration_str = f"{minutes}:{seconds:02d}" if minutes > 0 else f"{seconds}s"
                 final_prompt = (
                     f"{prompt}\n\nThis is a {duration_str} ({duration:.1f}s) video. "
-                    "Please provide timestamps (MM:SS or SS format) for major events, "
+                    "Provide timestamps (MM:SS or SS format) for major events, "
                     "scene changes, or significant actions."
                 )
                 print("Temporal mode: enhanced prompt with duration context")
@@ -257,12 +279,33 @@ class QwenVLAnalyzer:
                 }
             ]
 
+            # vLLM 0.27's parser sets video_needs_metadata=True for Qwen3-VL, so
+            # multi_modal_data["video"] entries must be (frames, metadata) tuples, not
+            # bare frame arrays -- Qwen2-VL has no such requirement. qwen-vl-utils
+            # 0.0.14 draws that exact line: return_video_metadata=True switches video
+            # entries to (frames, metadata) tuples AND stops putting "fps" in
+            # video_kwargs (fps moves inside each video's metadata instead); leaving it
+            # False is the library's own "BC for qwen2.5vl" branch, which is the shape
+            # already verified working end-to-end for Qwen2-VL. So request metadata
+            # only for the qwen3 series.
+            use_video_metadata = self.series == "qwen3"
             text = self.processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
             image_inputs, video_inputs, video_kwargs = process_vision_info(
                 messages,
                 return_video_kwargs=True,
+                return_video_metadata=use_video_metadata,
             )
-            frames_sampled = len(video_inputs[0]) if video_inputs else 0
+
+            if use_video_metadata:
+                # Each video_inputs entry is (frames, metadata); len() on the tuple
+                # itself would be 2, not the frame count, so unpack before counting.
+                # metadata["total_num_frames"] describes the SOURCE video, not the
+                # sampling result -- len(frames) is the actual number of frames handed
+                # to the model, matching what the qwen2 branch below reports.
+                frames, _video_meta = video_inputs[0] if video_inputs else (None, None)
+                frames_sampled = len(frames) if frames is not None else 0
+            else:
+                frames_sampled = len(video_inputs[0]) if video_inputs else 0
             print(f"Sampled {frames_sampled} frames at {fps} fps")
 
             mm_data = {}
@@ -271,10 +314,27 @@ class QwenVLAnalyzer:
             if image_inputs:
                 mm_data["image"] = image_inputs
 
+            # On the qwen2 (BC) path, qwen-vl-utils returns "fps" as a per-video list
+            # (e.g. [0.996]) since it supports batches of videos with independent
+            # sampling rates. transformers 4.x accepted that list verbatim in
+            # VideosKwargs, but transformers 5.x validates processor kwargs with
+            # huggingface_hub strict dataclasses, which require fps to be
+            # int | float | None and rejects the list with
+            # StrictDataclassFieldValidationError. This path always processes exactly
+            # one video, so unwrap a single-element list to the scalar the processor
+            # needs; leave empty/multi-video lists untouched rather than guessing. On
+            # the qwen3 (use_video_metadata) path video_kwargs never has an "fps" key
+            # at all -- it travels inside each video's metadata instead -- so this
+            # block is simply a no-op there, not dead code left over from the qwen2 fix.
+            mm_processor_kwargs = dict(video_kwargs)
+            kwargs_fps = mm_processor_kwargs.get("fps")
+            if isinstance(kwargs_fps, list) and len(kwargs_fps) == 1:
+                mm_processor_kwargs["fps"] = kwargs_fps[0]
+
             vllm_input = {
                 "prompt": text,
                 "multi_modal_data": mm_data,
-                "mm_processor_kwargs": video_kwargs,
+                "mm_processor_kwargs": mm_processor_kwargs,
             }
 
             sampling_params = SamplingParams(
@@ -310,7 +370,8 @@ class QwenVLAnalyzer:
             }
 
         finally:
-            Path(video_path).unlink(missing_ok=True)
+            import shutil
+            shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
 @app.cls(
@@ -325,7 +386,7 @@ class QwenVLAnalyzer:
 class QwenOmniAnalyzer:
     """Audio + Video analyzer using Qwen3-Omni models via vLLM with tensor parallelism."""
 
-    model_name: str = modal.parameter(default="qwen3-omni-30b-thinking")
+    model_name: str = modal.parameter(default="qwen3-omni-30b-instruct")
 
     @modal.enter()
     def setup(self):
@@ -378,6 +439,49 @@ class QwenOmniAnalyzer:
         ]
         subprocess.run(cmd, check=True, capture_output=True)
 
+    def _extract_audio_wav(
+        self,
+        source_path: str,
+        out_path: str,
+        start: float = None,
+        duration: float = None,
+        context: str = "",
+    ) -> Optional[str]:
+        """Extract a 16 kHz mono PCM WAV audio track from a media file via ffmpeg.
+
+        librosa/soundfile (used by qwen_omni_utils.process_mm_info) can't decode
+        compressed containers like .mp4 directly — modern librosa dropped the
+        audioread/ffmpeg fallback that used to paper over this. So audio must be
+        extracted to a raw WAV file before being passed as a standalone "audio"
+        content item.
+
+        Args:
+            source_path: Media file to extract audio from.
+            out_path: Where to write the extracted WAV.
+            start: Optional start offset in seconds (ffmpeg -ss).
+            duration: Optional duration in seconds (ffmpeg -t).
+            context: Extra text appended to the warning message on failure,
+                e.g. " for chunk 30s–60s".
+
+        Returns the output path, or None if ffmpeg fails (a warning is logged).
+        """
+        import subprocess
+
+        cmd = ["ffmpeg", "-y"]
+        if start is not None:
+            cmd += ["-ss", str(start)]
+        cmd += ["-i", source_path]
+        if duration is not None:
+            cmd += ["-t", str(duration)]
+        cmd += ["-vn", "-acodec", "pcm_s16le", "-ar", "16000", "-ac", "1", out_path]
+
+        result = subprocess.run(cmd, capture_output=True)
+        if result.returncode != 0:
+            print(f"Warning: audio extraction failed{context}: "
+                  f"{result.stderr.decode()[-300:]}")
+            return None
+        return out_path
+
     def _prepare_chunk_input(
         self,
         video_path: str,
@@ -387,6 +491,7 @@ class QwenOmniAnalyzer:
         max_pixels: int,
         fps: float,
         use_audio_in_video: bool,
+        original_video_path: str = "",
     ) -> tuple:
         """Prepare a vLLM input dict for a single video chunk.
 
@@ -403,11 +508,23 @@ class QwenOmniAnalyzer:
             "relative to the overall video timeline."
         )
 
+        # Extract audio to .wav from the original video (chunks may lack audio streams)
+        audio_path = None
+        if use_audio_in_video:
+            audio_src = original_video_path or video_path
+            audio_path = self._extract_audio_wav(
+                audio_src,
+                video_path.rsplit(".", 1)[0] + ".wav",
+                start=chunk_start,
+                duration=chunk_end - chunk_start,
+                context=f" for chunk {chunk_start:.0f}s–{chunk_end:.0f}s",
+            )
+
         content = [
             {"type": "video", "video": video_path, "max_pixels": max_pixels, "fps": fps},
         ]
-        if use_audio_in_video:
-            content.append({"type": "audio", "audio": video_path})
+        if audio_path:
+            content.append({"type": "audio", "audio": audio_path})
         content.append({"type": "text", "text": chunk_prompt})
 
         messages = [{"role": "user", "content": content}]
@@ -468,6 +585,7 @@ class QwenOmniAnalyzer:
         import tempfile
         import cv2
         import math
+        from urllib.parse import urlparse
         from vllm import SamplingParams
         from qwen_omni_utils import process_mm_info
 
@@ -475,10 +593,12 @@ class QwenOmniAnalyzer:
         response = requests.get(video_url, stream=True, timeout=30)
         response.raise_for_status()
 
-        with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as tmp_file:
+        filename = Path(urlparse(video_url).path).name or "video.mp4"
+        tmp_dir = tempfile.mkdtemp()
+        video_path = str(Path(tmp_dir) / filename)
+        with open(video_path, "wb") as tmp_file:
             for chunk in response.iter_content(chunk_size=8192):
                 tmp_file.write(chunk)
-            video_path = tmp_file.name
 
         sampling_params = SamplingParams(
             temperature=temperature,
@@ -497,7 +617,22 @@ class QwenOmniAnalyzer:
             cap.release()
 
             print(f"Video: {width}x{height}, {total_frames} frames, {video_fps:.2f} fps, {duration:.2f}s")
-            print(f"Audio: {'Enabled' if use_audio_in_video else 'Disabled'}")
+
+            # Probe for audio streams — skip audio processing if none exist
+            if use_audio_in_video:
+                import subprocess
+                probe = subprocess.run(
+                    ["ffprobe", "-v", "error", "-select_streams", "a",
+                     "-show_entries", "stream=codec_type", "-of", "csv=p=0", video_path],
+                    capture_output=True, text=True,
+                )
+                if not probe.stdout.strip():
+                    print("Audio: No audio stream found in video, disabling audio processing")
+                    use_audio_in_video = False
+                else:
+                    print("Audio: Enabled (audio stream detected)")
+            else:
+                print("Audio: Disabled")
 
             use_chunking = enable_chunking and duration > min_duration_for_chunking
 
@@ -522,6 +657,7 @@ class QwenOmniAnalyzer:
                     vllm_input, time_range = self._prepare_chunk_input(
                         chunk_path, chunk_start, chunk_end, prompt,
                         max_pixels, fps, use_audio_in_video,
+                        original_video_path=video_path,
                     )
                     vllm_inputs.append(vllm_input)
                     time_ranges.append(time_range)
@@ -593,7 +729,13 @@ class QwenOmniAnalyzer:
                     {"type": "video", "video": video_path, "max_pixels": max_pixels, "fps": fps},
                 ]
                 if use_audio_in_video:
-                    content.append({"type": "audio", "audio": video_path})
+                    # librosa/soundfile can't decode the .mp4 container directly —
+                    # extract to WAV first (see _extract_audio_wav).
+                    audio_path = self._extract_audio_wav(
+                        video_path, str(Path(tmp_dir) / "audio.wav"),
+                    )
+                    if audio_path:
+                        content.append({"type": "audio", "audio": audio_path})
                 content.append({"type": "text", "text": final_prompt})
 
                 messages = [{"role": "user", "content": content}]
@@ -649,7 +791,8 @@ class QwenOmniAnalyzer:
                 }
 
         finally:
-            Path(video_path).unlink(missing_ok=True)
+            import shutil
+            shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
 @app.local_entrypoint()
@@ -669,7 +812,7 @@ def main(
         modal run video-analyser.py --video-url "https://example.com/video.mp4"
 
         # Audio + visual with Qwen3-Omni (uses 2x A100-80GB with tensor parallelism)
-        modal run video-analyser.py --model qwen3-omni-30b-thinking --video-url "https://example.com/video.mp4"
+        modal run video-analyser.py --model qwen3-omni-30b-instruct --video-url "https://example.com/video.mp4"
 
         # Custom prompt
         modal run video-analyser.py \\
@@ -683,12 +826,13 @@ def main(
 
     if prompt is None:
         prompt = (
-            "Analyze BOTH the visual content AND the audio/speech in this video. "
-            "For each time segment, describe what is shown on screen AND quote any "
-            "spoken dialogue verbatim (use quotation marks for direct speech). "
-            "If someone is talking, transcribe their exact words — do not just say "
-            "'the person speaks'. Break the output into 5% steps of the total video "
-            "length (e.g. for a 60s video: 0:00–0:03, 0:03–0:06, etc)."
+            "Transcribe and describe this video moment by moment in chronological order.\n\n"
+            "Rules:\n"
+            "- Transcribe ALL speech verbatim in quotation marks. Never paraphrase or say 'the person speaks'.\n"
+            "- Describe visible actions, scenes, text on screen, and sound effects.\n"
+            "- Cover every segment — do not skip or merge time ranges.\n"
+            "- Do NOT summarize. Do NOT add conclusions, opinions, or an overview section.\n"
+            "- Output ONLY the entries, nothing else."
         )
 
     if model not in MODELS:

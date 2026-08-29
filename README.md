@@ -54,7 +54,7 @@ modal run video-analyser.py --video-url "..."
 uv sync
 ```
 
-This installs `modal`, `requests`, and `numpy` into a local `.venv` managed by [uv](https://docs.astral.sh/uv/).
+This installs `modal`, `python-dotenv`, `requests`, and `numpy` into a local `.venv` managed by [uv](https://docs.astral.sh/uv/).
 
 ### 2. Configure environment
 
@@ -66,10 +66,17 @@ cp .env.example .env
 ### 3. Authenticate with Modal
 
 ```bash
-modal setup   # interactive setup — OR fill MODAL_TOKEN_ID / MODAL_TOKEN_SECRET in .env
+modal setup   # interactive setup — writes ~/.modal.toml
 ```
 
 Get your tokens at [modal.com/settings](https://modal.com/settings).
+
+If you'd rather keep `MODAL_TOKEN_ID` / `MODAL_TOKEN_SECRET` in `.env` instead, note that the `modal` CLI does **not** read `.env` files on its own — export the values into your shell first:
+
+```bash
+set -a && . ./.env && set +a
+modal run video-analyser.py --video-url "..."
+```
 
 ### 4. (Optional) HuggingFace token for speaker diarization
 
@@ -78,23 +85,19 @@ Speaker diarization (identifying *who* said what) is powered by [pyannote.audio]
 **How to get the token:**
 
 1. Create a free account at [huggingface.co](https://huggingface.co/join)
-2. Go to [huggingface.co/pyannote/speaker-diarization-3.1](https://huggingface.co/pyannote/speaker-diarization-3.1) and accept the license
-3. Also accept the license at [huggingface.co/pyannote/segmentation-3.0](https://huggingface.co/pyannote/segmentation-3.0)
-4. Generate an access token at [huggingface.co/settings/tokens](https://huggingface.co/settings/tokens) (a `read` token is sufficient)
+2. Go to [huggingface.co/pyannote/speaker-diarization-community-1](https://huggingface.co/pyannote/speaker-diarization-community-1) and accept the license — this is the model whisperx 3.8.x actually loads. Accepting `speaker-diarization-3.1` (an older pipeline) instead does nothing, since that pipeline is never loaded.
+3. Generate an access token at [huggingface.co/settings/tokens](https://huggingface.co/settings/tokens) (a `read` token is sufficient)
 
-**Then provide it via one of:**
+**Then provide it:**
 
-**Option A — Modal secret (recommended):**
-
-```bash
-modal secret create huggingface-secret HF_TOKEN=hf_your_token_here
-```
-
-**Option B — Environment variable / `.env` file:**
+Both scripts load `HF_TOKEN` via `modal.Secret.from_dotenv()`, which reads your local `.env` **file** at run/deploy time — it does not read your shell environment and does not consult any named Modal secret. `modal secret create huggingface-secret HF_TOKEN=...` has **no effect** on these scripts. Put the token in `.env` instead:
 
 ```bash
-export HF_TOKEN=hf_your_token_here
+# in .env
+HF_TOKEN=hf_your_token_here
 ```
+
+If diarization is requested without a usable token, `audio-transcript.py` raises a clear error at runtime rather than failing silently.
 
 ---
 
@@ -109,28 +112,30 @@ Uses [Qwen2-VL](https://huggingface.co/Qwen/Qwen2-VL-7B-Instruct), [Qwen3-VL](ht
 | `qwen2-vl-2b` | Qwen2-VL 2B | A100 | Visual only, fast |
 | `qwen2-vl-7b` | Qwen2-VL 7B | A100 | Visual only |
 | `qwen3-vl-8b` | Qwen3-VL 8B | A100 | Visual only, strong _(default)_ |
-| `qwen3-vl-235b` | Qwen3-VL 235B | 8× H100 | Visual only, SOTA |
+| `qwen3-vl-235b` | Qwen3-VL 235B | 8× H100 | **Not currently supported** — see below |
 | `qwen3-omni-30b-thinking` | Qwen3-Omni 30B | 2× A100-80GB | Audio + Visual + reasoning |
-| `qwen3-omni-30b-instruct` | Qwen3-Omni 30B | 2× H100 | Audio + Visual |
+| `qwen3-omni-30b-instruct` | Qwen3-Omni 30B | 2× A100-80GB | Audio + Visual |
+
+> The GPU column describes what each model is sized for, not what actually gets provisioned. Real hardware is fixed by the Modal class each model dispatches to — `QwenVLAnalyzer` always runs on a single A100, `QwenOmniAnalyzer` always runs on 2× A100-80GB. `qwen3-vl-235b` is listed in the code but both `main()` and the web API reject it at runtime ("Multi-GPU VL support is not yet implemented") — there's no working 8-GPU path yet.
 
 ### Choosing the right model
 
 The models fall into two families with fundamentally different capabilities:
 
-**Qwen3-VL (Vision-Language)** — analyzes video frames and text only. No audio processing. Superior visual understanding (OCR, charts, fine details). The 235B variant is state-of-the-art for pure visual tasks but requires 8x H100 GPUs.
+**Qwen3-VL (Vision-Language)** — analyzes video frames and text only. No audio processing. Superior visual understanding (OCR, charts, fine details). The 235B variant would be state-of-the-art for pure visual tasks, but it isn't runnable here yet — `QwenVLAnalyzer` is hardcoded to a single GPU and multi-GPU VL support hasn't been implemented.
 
 **Qwen3-Omni (Multimodal)** — processes audio and video together natively. Smaller and faster than VL-235B, but understands the relationship between what is said and what is shown. This is the right choice when your video has meaningful audio (speech, music, sound effects).
 
 **Thinking vs Instruct** — The Omni family offers two variants:
-- **Thinking** uses chain-of-thought reasoning before answering. Better at complex tasks where audio and visual cues need to be connected (e.g. a lecturer pointing at a whiteboard while explaining a formula). Slower, uses more memory.
-- **Instruct** answers immediately without a reasoning step. Faster and cheaper, best for straightforward tasks like describing scenes or casual conversation.
+- **Instruct** _(default)_ answers immediately without a reasoning step. Best for transcription, scene description, and general audio+video understanding. Faster and more token-efficient.
+- **Thinking** uses chain-of-thought reasoning before answering. Better at complex tasks where audio and visual cues need to be connected (e.g. a lecturer pointing at a whiteboard while explaining a formula). Slower per request; both variants run on identical hardware (2× A100-80GB, tp=2) — the difference is reasoning behavior, not memory footprint.
 
 | Your use case | Recommended model |
 |---|---|
 | Quick visual description, no audio needed | `qwen3-vl-8b` _(default)_ |
-| Highest accuracy for documents, diagrams, complex visuals | `qwen3-vl-235b` |
-| Video with audio — lectures, tutorials, analysis | `qwen3-omni-30b-thinking` |
-| Video with audio — vlogs, casual content, real-time | `qwen3-omni-30b-instruct` |
+| Highest accuracy for documents, diagrams, complex visuals | `qwen3-vl-8b` _(`qwen3-vl-235b` is not currently runnable)_ |
+| Video with audio — transcription, description, general use | `qwen3-omni-30b-instruct` _(default for Omni)_ |
+| Video with audio — complex reasoning, connecting cues | `qwen3-omni-30b-thinking` |
 | Fast testing / prototyping | `qwen2-vl-2b` |
 
 > **Tip:** If your video has important audio (speech, narration), always pick an Omni model. The VL models are "deaf" — they will analyze the visuals in detail but have no idea what is being said.
@@ -140,17 +145,17 @@ The models fall into two families with fundamentally different capabilities:
 ```bash
 # Visual analysis with Qwen3-VL 8B (default model)
 modal run video-analyser.py \
-  --video-url "http://commondatastorage.googleapis.com/gtv-videos-bucket/sample/WeAreGoingOnBullrun.mp4"
+  --video-url "https://media.w3.org/2010/05/sintel/trailer.mp4"
 
 # Custom prompt
 modal run video-analyser.py \
-  --video-url "http://commondatastorage.googleapis.com/gtv-videos-bucket/sample/WeAreGoingOnBullrun.mp4" \
+  --video-url "https://media.w3.org/2010/05/sintel/trailer.mp4" \
   --prompt "Describe what happens in this video step by step."
 
 # Use Qwen3-Omni for audio + visual understanding
 modal run video-analyser.py \
-  --model qwen3-omni-30b-thinking \
-  --video-url "http://commondatastorage.googleapis.com/gtv-videos-bucket/sample/WeAreGoingOnBullrun.mp4" \
+  --model qwen3-omni-30b-instruct \
+  --video-url "https://media.w3.org/2010/05/sintel/trailer.mp4" \
   --prompt "Describe what is said and what is shown."
 
 # Sample more frames (higher quality, slower)
@@ -159,14 +164,18 @@ modal run video-analyser.py --fps 2.0
 
 ### Output
 
-Results are saved to `video_analysis_<model>.json` and printed to the terminal.
+Results are saved to `video_analysis_<model>.json` and printed to the terminal. The JSON shape differs by analyzer and mode:
+
+- **`QwenVLAnalyzer`** (Qwen2-VL / Qwen3-VL, visual only) — no `chunked` key and no `audio_enabled`/`audio_extracted` fields at all; `video_metadata` has `frames_sampled` but nothing audio-related.
+- **`QwenOmniAnalyzer`, single pass** (videos under `min_duration_for_chunking`, default 120s) — adds `"chunked": false` at the top level, plus `audio_enabled`/`audio_extracted` inside `video_metadata`.
+- **`QwenOmniAnalyzer`, chunked** (longer videos) — adds `"chunked": true`, `num_chunks`, `chunk_duration`, and a `chunks` array with per-segment `time_range`/`analysis`; `video_metadata` carries `audio_enabled` but not `frames_sampled` or `audio_extracted`.
 
 <details>
-<summary><b>Example output</b> — Qwen3-Omni analyzing the <a href="http://commondatastorage.googleapis.com/gtv-videos-bucket/sample/WeAreGoingOnBullrun.mp4">Bullrun sample video</a> (47s, audio + visual)</summary>
+<summary><b>Example output</b> — Qwen3-Omni analyzing the Bullrun sample video (47s, audio + visual) — this sample is no longer publicly available; the output below is kept as a historical example</summary>
 
 ```
 Model    : Qwen/Qwen3-Omni-30B-A3B-Thinking (QWEN3-OMNI)
-Video    : WeAreGoingOnBullrun.mp4
+Video    : http://commondatastorage.googleapis.com/gtv-videos-bucket/sample/WeAreGoingOnBullrun.mp4
 Duration : 47.46s
 Mode     : SINGLE PASS
 
@@ -233,7 +242,7 @@ video ends with the truck driving on the road.
 
 </details>
 
-The JSON output file includes full metadata:
+Example JSON output for the **Omni single-pass** case above:
 
 ```json
 {
@@ -270,7 +279,7 @@ modal deploy video-analyser.py
 curl -X POST "https://your-app.modal.run/analyze" \
   -H "Content-Type: application/json" \
   -d '{
-    "video_url": "http://commondatastorage.googleapis.com/gtv-videos-bucket/sample/WeAreGoingOnBullrun.mp4",
+    "video_url": "https://media.w3.org/2010/05/sintel/trailer.mp4",
     "prompt": "What happens in this video?",
     "model": "qwen3-vl-8b",
     "fps": 1.0
@@ -364,9 +373,11 @@ modal run audio-transcript.py \
 │  │   A100 · whisperx large-v2 · 15 concurrent inputs  ││
 │  └─────────────────────────────────────────────────────┘│
 │                                                          │
-│  ┌─────────────────────────────────────────────────────┐│
-│  │   Persistent Volume (model weight cache)            ││
-│  └─────────────────────────────────────────────────────┘│
+│  ┌─────────────────────────┐  ┌────────────────────────┐│
+│  │   qwen3-vl-cache        │  │  whisper-cache         ││
+│  │   Volume (weights)      │  │  Volume (weights)      ││
+│  └─────────────────────────┘  └────────────────────────┘│
+│  (two separate Volumes — not shared between scripts)     │
 └─────────────────────────────────────────────────────────┘
 ```
 
