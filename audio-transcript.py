@@ -133,8 +133,7 @@ class WhisperXModel:
                     "Access denied to the pyannote diarization model. "
                     "Your HuggingFace token must belong to an account that has accepted the gated-model terms.\n\n"
                     "  1. Visit https://huggingface.co/pyannote/speaker-diarization-community-1 and accept the conditions\n"
-                    "  2. Visit https://huggingface.co/pyannote/segmentation-3.0 and accept the conditions\n"
-                    "  3. Ensure HF_TOKEN in your .env file belongs to the same account\n\n"
+                    "  2. Ensure HF_TOKEN in your .env file belongs to the same account\n\n"
                     "Then re-run the command."
                 ) from exc
             raise
