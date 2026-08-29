@@ -22,7 +22,7 @@ Exact values, verified against PyPI metadata on 2026-08-29. Do not substitute.
 - **Modal client:** `modal>=1.5,<2` in `pyproject.toml`. Modal 1.6.0 will flip Sandbox V2 on by default and remove already-deprecated APIs; this repo uses none of them, but pin the major version.
 - **No behaviour changes.** No new models, no GPU changes, no `enforce_eager` changes, no snapshot APIs. Pins and dead code only.
 - **Every verification runs on Modal.** The local machine has an 8 GB laptop GPU and cannot run any of these models.
-- **Approximate GPU cost per verification run** is noted on each task so the executor can batch expensive runs. Use the sample URL `http://commondatastorage.googleapis.com/gtv-videos-bucket/sample/WeAreGoingOnBullrun.mp4` for every smoke test — it is public, short, and has an audio track (so it doubles as the transcription fixture).
+- **Approximate GPU cost per verification run** is noted on each task so the executor can batch expensive runs. Use the sample URL `https://media.w3.org/2010/05/sintel/trailer.mp4` for every smoke test — verified 2026-08-29: HTTP 200, 52.2s, h264 + aac stereo, 4.4 MB. It is public, short, under the 120s chunking threshold, and has an audio track, so it doubles as the transcription fixture. The README's old commondatastorage.googleapis.com sample now returns 403 and must not be used.
 
 ---
 
@@ -142,7 +142,7 @@ whisperx 3.8.6 keeps the torch 2.8 line, so the existing `torch==2.8.0` / `torch
 - [ ] **Step 1: Establish the baseline — run the current app once and keep the output**
 
 ```bash
-.venv/bin/modal run audio-transcript.py --audio-url "http://commondatastorage.googleapis.com/gtv-videos-bucket/sample/WeAreGoingOnBullrun.mp4" --no-diarize
+.venv/bin/modal run audio-transcript.py --audio-url "https://media.w3.org/2010/05/sintel/trailer.mp4" --no-diarize
 ```
 
 Expected: completes and writes transcript JSON. Save the printed transcript text somewhere outside the repo (e.g. the scratchpad) — Step 5 compares against it. Approximate cost: A100, ~2–4 min.
@@ -182,7 +182,7 @@ Expected: resolves without error. A conflict here means a pin above is wrong —
 - [ ] **Step 4: Run the same transcription on the new image**
 
 ```bash
-.venv/bin/modal run audio-transcript.py --audio-url "http://commondatastorage.googleapis.com/gtv-videos-bucket/sample/WeAreGoingOnBullrun.mp4" --no-diarize
+.venv/bin/modal run audio-transcript.py --audio-url "https://media.w3.org/2010/05/sintel/trailer.mp4" --no-diarize
 ```
 
 Expected: completes, transcript is substantively the same as Step 1 (word timings may differ slightly; the words should not).
@@ -192,7 +192,7 @@ Expected: completes, transcript is substantively the same as Step 1 (word timing
 This is the risky half of the whisperx bump. 3.8.x switched to `pyannote/speaker-diarization-community-1`, and when the HF token has not accepted **that** model's conditions, diarization does not error — it silently returns `SPEAKER_UNKNOWN` labels. Accepting the older `speaker-diarization-3.1` conditions does nothing.
 
 ```bash
-.venv/bin/modal run audio-transcript.py --audio-url "http://commondatastorage.googleapis.com/gtv-videos-bucket/sample/WeAreGoingOnBullrun.mp4"
+.venv/bin/modal run audio-transcript.py --audio-url "https://media.w3.org/2010/05/sintel/trailer.mp4"
 ```
 
 Expected: segments carry real labels (`SPEAKER_00`, `SPEAKER_01`, …).
@@ -253,7 +253,7 @@ Leave `HF_HUB_ENABLE_HF_TRANSFER`, `HF_HOME` and `VLLM_WORKER_MULTIPROC_METHOD` 
 The image rebuilds on the next `modal run`; Step 5 triggers it. Time that run and compare against Task 3's baseline — image build is the first phase of its output.
 
 ```bash
-time .venv/bin/modal run video-analyser.py --model qwen2-vl-2b --video-url "http://commondatastorage.googleapis.com/gtv-videos-bucket/sample/WeAreGoingOnBullrun.mp4"
+time .venv/bin/modal run video-analyser.py --model qwen2-vl-2b --video-url "https://media.w3.org/2010/05/sintel/trailer.mp4"
 ```
 
 Expected: the build phase is noticeably shorter than before — the flash-attn source compile was its dominant cost. This is the same command as Step 5; run it once and use it for both.
@@ -261,7 +261,7 @@ Expected: the build phase is noticeably shorter than before — the flash-attn s
 - [ ] **Step 5: Prove the VL path still works on the old vLLM**
 
 ```bash
-.venv/bin/modal run video-analyser.py --model qwen2-vl-2b --video-url "http://commondatastorage.googleapis.com/gtv-videos-bucket/sample/WeAreGoingOnBullrun.mp4"
+.venv/bin/modal run video-analyser.py --model qwen2-vl-2b --video-url "https://media.w3.org/2010/05/sintel/trailer.mp4"
 ```
 
 Expected: a coherent description of the video. This isolates "removing flash-attn broke nothing" from the vLLM bump that follows. Approximate cost: A100, ~3–5 min.
@@ -438,7 +438,7 @@ git commit -m "chore: upgrade to vLLM 0.27.1 on torch 2.13 / CUDA 12.9"
 - [ ] **Step 1: Smallest model first**
 
 ```bash
-.venv/bin/modal run video-analyser.py --model qwen2-vl-2b --video-url "http://commondatastorage.googleapis.com/gtv-videos-bucket/sample/WeAreGoingOnBullrun.mp4"
+.venv/bin/modal run video-analyser.py --model qwen2-vl-2b --video-url "https://media.w3.org/2010/05/sintel/trailer.mp4"
 ```
 
 Expected: a coherent description. Approximate cost: A100, ~3–5 min (first run also re-verifies the cached weights in the `qwen3-vl-cache` volume).
@@ -456,13 +456,13 @@ Each is a real API surface that moved between vLLM 0.13 and 0.27. Apply only the
 - [ ] **Step 3: Re-run until Step 1's command produces a description**
 
 ```bash
-.venv/bin/modal run video-analyser.py --model qwen2-vl-2b --video-url "http://commondatastorage.googleapis.com/gtv-videos-bucket/sample/WeAreGoingOnBullrun.mp4"
+.venv/bin/modal run video-analyser.py --model qwen2-vl-2b --video-url "https://media.w3.org/2010/05/sintel/trailer.mp4"
 ```
 
 - [ ] **Step 4: Verify the Qwen3-VL path too — it is a different vLLM architecture class than Qwen2-VL**
 
 ```bash
-.venv/bin/modal run video-analyser.py --model qwen3-vl-8b --video-url "http://commondatastorage.googleapis.com/gtv-videos-bucket/sample/WeAreGoingOnBullrun.mp4"
+.venv/bin/modal run video-analyser.py --model qwen3-vl-8b --video-url "https://media.w3.org/2010/05/sintel/trailer.mp4"
 ```
 
 Expected: a coherent description. Approximate cost: A100, ~5 min. Skip `qwen3-vl-235b` — it needs 8×H100 and proves nothing the 8B does not.
@@ -502,7 +502,7 @@ The Omni analyzer is the more fragile of the two: tensor parallelism across 2 GP
 The sample video is under the 120 s `min_duration_for_chunking` threshold, so this exercises the single-segment path first.
 
 ```bash
-.venv/bin/modal run video-analyser.py --model qwen3-omni-30b-instruct --video-url "http://commondatastorage.googleapis.com/gtv-videos-bucket/sample/WeAreGoingOnBullrun.mp4"
+.venv/bin/modal run video-analyser.py --model qwen3-omni-30b-instruct --video-url "https://media.w3.org/2010/05/sintel/trailer.mp4"
 ```
 
 Expected: a description that references **both** what is seen and what is heard. Approximate cost: 2×A100-80GB, ~8–12 min. If the output only ever describes visuals, the audio modality is being dropped — see Step 2(c).
@@ -518,7 +518,7 @@ Expected: a description that references **both** what is seen and what is heard.
 - [ ] **Step 3: Verify the chunked path on a video longer than 120 s**
 
 ```bash
-.venv/bin/modal run video-analyser.py --model qwen3-omni-30b-instruct --video-url "http://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4"
+.venv/bin/modal run video-analyser.py --model qwen3-omni-30b-instruct --video-url "https://archive.org/download/BigBuckBunny_124/Content/big_buck_bunny_720p_surround.mp4"
 ```
 
 Expected: log lines showing multiple chunks submitted in one `llm.generate()` call, and per-chunk output with timeline-relative references. Approximate cost: 2×A100-80GB, ~15 min. If that URL 404s, substitute any public MP4 over two minutes long and note which you used.
