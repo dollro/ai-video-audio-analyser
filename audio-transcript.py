@@ -31,8 +31,7 @@ GPU_CONFIG = "A100"
 CACHE_DIR = "/cache"
 cache_vol = modal.Volume.from_name("whisper-cache", create_if_missing=True)
 
-# HuggingFace token — needed for speaker diarization.
-# Set HF_TOKEN in your environment, or create a Modal secret named "huggingface-secret".
+# Load secrets from .env file in the project directory at run/deploy time.
 hf_secret = modal.Secret.from_dotenv()
 
 
@@ -121,7 +120,7 @@ class WhisperXModel:
         if not hf_token:
             raise ValueError(
                 "HF_TOKEN is required for speaker diarization. "
-                "Set it via a Modal secret named 'huggingface-secret' or as an environment variable."
+                "Set HF_TOKEN=... in the .env file in your project directory."
             )
 
         print(f"Diarizing (min_speakers={min_speakers}, max_speakers={max_speakers})...")
