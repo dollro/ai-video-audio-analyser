@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Optional, Dict, Any
 
 # Configure CUDA environment
-cuda_version = "12.8.0"
+cuda_version = "12.9.0"
 flavor = "devel"
 operating_sys = "ubuntu22.04"
 tag = f"{cuda_version}-{flavor}-{operating_sys}"
@@ -13,19 +13,11 @@ image = (
     modal.Image.from_registry(f"nvidia/cuda:{tag}", add_python="3.12")
     .entrypoint([])
     .apt_install("git", "ffmpeg")
-    # Install PyTorch with CUDA 12.8
-    .uv_pip_install(
-        "torch==2.7.0",
-        "torchvision==0.22.0",
-        "torchaudio==2.7.0",
-        index_url="https://download.pytorch.org/whl/cu128",
-        uv_version="0.10.3",
-    )
     .uv_pip_install(
         "fastapi[standard]",
         "uvicorn[standard]",
         "pydantic>=2.0",
-        "transformers>=4.48.0",
+        "transformers>=5.5.3",
         "accelerate>=0.26.0",
         "bitsandbytes>=0.44.0",
         "qwen-vl-utils>=0.0.14",
@@ -44,8 +36,8 @@ image = (
         "pyyaml",
         uv_version="0.10.3",
     )
-    # Install vLLM (may adjust PyTorch internals)
-    .uv_pip_install("vllm==0.13.0", uv_version="0.10.3")
+    # Install vLLM last so its exact torch/transformers pins win
+    .uv_pip_install("vllm==0.27.1", uv_version="0.10.3")
     # Re-install hf_transfer after vLLM (vLLM may override huggingface_hub without the extra)
     .uv_pip_install("hf_transfer", uv_version="0.10.3")
     .env({
