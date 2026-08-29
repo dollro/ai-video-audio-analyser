@@ -110,7 +110,7 @@ Uses [Qwen2-VL](https://huggingface.co/Qwen/Qwen2-VL-7B-Instruct), [Qwen3-VL](ht
 | `qwen3-vl-8b` | Qwen3-VL 8B | A100 | Visual only, strong _(default)_ |
 | `qwen3-vl-235b` | Qwen3-VL 235B | 8× H100 | Visual only, SOTA |
 | `qwen3-omni-30b-thinking` | Qwen3-Omni 30B | 2× A100-80GB | Audio + Visual + reasoning |
-| `qwen3-omni-30b-instruct` | Qwen3-Omni 30B | 2× H100 | Audio + Visual |
+| `qwen3-omni-30b-instruct` | Qwen3-Omni 30B | 2× A100-80GB | Audio + Visual |
 
 ### Choosing the right model
 

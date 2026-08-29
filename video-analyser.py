@@ -105,7 +105,6 @@ MODELS = {
     },
     "qwen3-omni-30b-instruct": {
         "id": "Qwen/Qwen3-Omni-30B-A3B-Instruct",
-        #"gpu": "H100:2",
         "gpu": "A100-80GB:2",
         "memory": 163840,
         "description": "Qwen3-Omni 30B Instruct — audio+video understanding",
