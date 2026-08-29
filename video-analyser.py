@@ -125,6 +125,40 @@ MODELS = {
 }
 
 
+@app.function(gpu="L4", timeout=600)
+def verify_env():
+    """Assert the image resolved to the intended inference stack.
+
+    Cheap gate before any expensive GPU smoke test — a resolution mistake in the
+    image definition surfaces here in a couple of minutes instead of on an A100.
+    """
+    import torch
+    import transformers
+    import vllm
+    from packaging.version import Version
+
+    versions = {
+        "vllm": vllm.__version__,
+        "torch": torch.__version__,
+        "transformers": transformers.__version__,
+        "cuda": torch.version.cuda,
+    }
+    for name, value in versions.items():
+        print(f"{name}: {value}")
+
+    assert Version(vllm.__version__) >= Version("0.27.1"), versions
+    assert Version(torch.__version__.split("+")[0]) >= Version("2.13.0"), versions
+    assert Version(transformers.__version__) >= Version("5.5.3"), versions
+    assert torch.cuda.is_available(), "CUDA not available in container"
+
+    # The multimodal helpers are imported inside the analyzer methods; confirm
+    # here that they still import against the resolved transformers version.
+    from qwen_omni_utils import process_mm_info  # noqa: F401
+    from qwen_vl_utils import process_vision_info  # noqa: F401
+
+    print("environment OK")
+
+
 hf_secret = modal.Secret.from_dotenv()
 
 
