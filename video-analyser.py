@@ -22,6 +22,7 @@ image = (
         "bitsandbytes>=0.44.0",
         "qwen-vl-utils>=0.0.14",
         "qwen-omni-utils",
+        "audioread",
         "huggingface_hub[hf_transfer]",
         "safetensors",
         "tokenizers",
@@ -38,10 +39,8 @@ image = (
     )
     # Install vLLM last so its exact torch/transformers pins win
     .uv_pip_install("vllm==0.27.1", uv_version="0.10.3")
-    # Re-install hf_transfer after vLLM (vLLM may override huggingface_hub without the extra)
-    .uv_pip_install("hf_transfer", uv_version="0.10.3")
     .env({
-        "HF_HUB_ENABLE_HF_TRANSFER": "1",
+        "HF_XET_HIGH_PERFORMANCE": "1",
         "HF_HOME": "/cache/huggingface",
         # Force spawn (not fork) for vLLM V1 tensor-parallel workers —
         # pynvml calls cuInit() before fork, which breaks CUDA in children.
