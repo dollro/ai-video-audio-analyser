@@ -46,17 +46,11 @@ image = (
     )
     # Install vLLM (may adjust PyTorch internals)
     .uv_pip_install("vllm==0.13.0", uv_version="0.10.3")
-    # Build deps + compile flash-attn AFTER vLLM so it links against the final PyTorch ABI
-    .uv_pip_install("packaging", "wheel", "setuptools", "ninja", "psutil", uv_version="0.10.3")
-    .run_commands(
-        "pip install flash-attn==2.8.3 --no-build-isolation"
-    )
     # Re-install hf_transfer after vLLM (vLLM may override huggingface_hub without the extra)
     .uv_pip_install("hf_transfer", uv_version="0.10.3")
     .env({
         "HF_HUB_ENABLE_HF_TRANSFER": "1",
         "HF_HOME": "/cache/huggingface",
-        "TORCH_CUDA_ARCH_LIST": "8.0;8.6;8.9;9.0",
         # Force spawn (not fork) for vLLM V1 tensor-parallel workers —
         # pynvml calls cuInit() before fork, which breaks CUDA in children.
         "VLLM_WORKER_MULTIPROC_METHOD": "spawn",
