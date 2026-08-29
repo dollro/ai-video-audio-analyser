@@ -120,7 +120,8 @@ MODELS = {
     },
     "qwen3-omni-30b-instruct": {
         "id": "Qwen/Qwen3-Omni-30B-A3B-Instruct",
-        "gpu": "H100:2",
+        #"gpu": "H100:2",
+        "gpu": "A100-80GB:2",
         "memory": 163840,
         "description": "Qwen3-Omni 30B Instruct — audio+video understanding",
         "series": "qwen3-omni",
@@ -211,6 +212,7 @@ class QwenVLAnalyzer:
         import requests
         import tempfile
         import cv2
+        from urllib.parse import urlparse
         from vllm import SamplingParams
         from qwen_vl_utils import process_vision_info
 
@@ -218,10 +220,12 @@ class QwenVLAnalyzer:
         response = requests.get(video_url, stream=True, timeout=30)
         response.raise_for_status()
 
-        with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as tmp_file:
+        filename = Path(urlparse(video_url).path).name or "video.mp4"
+        tmp_dir = tempfile.mkdtemp()
+        video_path = str(Path(tmp_dir) / filename)
+        with open(video_path, "wb") as tmp_file:
             for chunk in response.iter_content(chunk_size=8192):
                 tmp_file.write(chunk)
-            video_path = tmp_file.name
 
         try:
             cap = cv2.VideoCapture(video_path)
@@ -240,7 +244,7 @@ class QwenVLAnalyzer:
                 duration_str = f"{minutes}:{seconds:02d}" if minutes > 0 else f"{seconds}s"
                 final_prompt = (
                     f"{prompt}\n\nThis is a {duration_str} ({duration:.1f}s) video. "
-                    "Please provide timestamps (MM:SS or SS format) for major events, "
+                    "Provide timestamps (MM:SS or SS format) for major events, "
                     "scene changes, or significant actions."
                 )
                 print("Temporal mode: enhanced prompt with duration context")
@@ -310,7 +314,8 @@ class QwenVLAnalyzer:
             }
 
         finally:
-            Path(video_path).unlink(missing_ok=True)
+            import shutil
+            shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
 @app.cls(
@@ -325,7 +330,7 @@ class QwenVLAnalyzer:
 class QwenOmniAnalyzer:
     """Audio + Video analyzer using Qwen3-Omni models via vLLM with tensor parallelism."""
 
-    model_name: str = modal.parameter(default="qwen3-omni-30b-thinking")
+    model_name: str = modal.parameter(default="qwen3-omni-30b-instruct")
 
     @modal.enter()
     def setup(self):
@@ -387,6 +392,7 @@ class QwenOmniAnalyzer:
         max_pixels: int,
         fps: float,
         use_audio_in_video: bool,
+        original_video_path: str = "",
     ) -> tuple:
         """Prepare a vLLM input dict for a single video chunk.
 
@@ -403,11 +409,28 @@ class QwenOmniAnalyzer:
             "relative to the overall video timeline."
         )
 
+        # Extract audio to .wav from the original video (chunks may lack audio streams)
+        # librosa/soundfile also can't decode .mp4 containers directly
+        audio_path = None
+        if use_audio_in_video:
+            import subprocess
+            audio_src = original_video_path or video_path
+            audio_path = video_path.rsplit(".", 1)[0] + ".wav"
+            cmd = ["ffmpeg", "-y", "-ss", str(chunk_start),
+                   "-i", audio_src, "-t", str(chunk_end - chunk_start),
+                   "-vn", "-acodec", "pcm_s16le", "-ar", "16000", "-ac", "1",
+                   audio_path]
+            result = subprocess.run(cmd, capture_output=True)
+            if result.returncode != 0:
+                print(f"Warning: audio extraction failed for chunk {chunk_start:.0f}s–{chunk_end:.0f}s: "
+                      f"{result.stderr.decode()[-300:]}")
+                audio_path = None
+
         content = [
             {"type": "video", "video": video_path, "max_pixels": max_pixels, "fps": fps},
         ]
-        if use_audio_in_video:
-            content.append({"type": "audio", "audio": video_path})
+        if audio_path:
+            content.append({"type": "audio", "audio": audio_path})
         content.append({"type": "text", "text": chunk_prompt})
 
         messages = [{"role": "user", "content": content}]
@@ -468,6 +491,7 @@ class QwenOmniAnalyzer:
         import tempfile
         import cv2
         import math
+        from urllib.parse import urlparse
         from vllm import SamplingParams
         from qwen_omni_utils import process_mm_info
 
@@ -475,10 +499,12 @@ class QwenOmniAnalyzer:
         response = requests.get(video_url, stream=True, timeout=30)
         response.raise_for_status()
 
-        with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as tmp_file:
+        filename = Path(urlparse(video_url).path).name or "video.mp4"
+        tmp_dir = tempfile.mkdtemp()
+        video_path = str(Path(tmp_dir) / filename)
+        with open(video_path, "wb") as tmp_file:
             for chunk in response.iter_content(chunk_size=8192):
                 tmp_file.write(chunk)
-            video_path = tmp_file.name
 
         sampling_params = SamplingParams(
             temperature=temperature,
@@ -497,7 +523,22 @@ class QwenOmniAnalyzer:
             cap.release()
 
             print(f"Video: {width}x{height}, {total_frames} frames, {video_fps:.2f} fps, {duration:.2f}s")
-            print(f"Audio: {'Enabled' if use_audio_in_video else 'Disabled'}")
+
+            # Probe for audio streams — skip audio processing if none exist
+            if use_audio_in_video:
+                import subprocess
+                probe = subprocess.run(
+                    ["ffprobe", "-v", "error", "-select_streams", "a",
+                     "-show_entries", "stream=codec_type", "-of", "csv=p=0", video_path],
+                    capture_output=True, text=True,
+                )
+                if not probe.stdout.strip():
+                    print("Audio: No audio stream found in video, disabling audio processing")
+                    use_audio_in_video = False
+                else:
+                    print("Audio: Enabled (audio stream detected)")
+            else:
+                print("Audio: Disabled")
 
             use_chunking = enable_chunking and duration > min_duration_for_chunking
 
@@ -522,6 +563,7 @@ class QwenOmniAnalyzer:
                     vllm_input, time_range = self._prepare_chunk_input(
                         chunk_path, chunk_start, chunk_end, prompt,
                         max_pixels, fps, use_audio_in_video,
+                        original_video_path=video_path,
                     )
                     vllm_inputs.append(vllm_input)
                     time_ranges.append(time_range)
@@ -649,7 +691,8 @@ class QwenOmniAnalyzer:
                 }
 
         finally:
-            Path(video_path).unlink(missing_ok=True)
+            import shutil
+            shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
 @app.local_entrypoint()
@@ -669,7 +712,7 @@ def main(
         modal run video-analyser.py --video-url "https://example.com/video.mp4"
 
         # Audio + visual with Qwen3-Omni (uses 2x A100-80GB with tensor parallelism)
-        modal run video-analyser.py --model qwen3-omni-30b-thinking --video-url "https://example.com/video.mp4"
+        modal run video-analyser.py --model qwen3-omni-30b-instruct --video-url "https://example.com/video.mp4"
 
         # Custom prompt
         modal run video-analyser.py \\
@@ -683,12 +726,13 @@ def main(
 
     if prompt is None:
         prompt = (
-            "Analyze BOTH the visual content AND the audio/speech in this video. "
-            "For each time segment, describe what is shown on screen AND quote any "
-            "spoken dialogue verbatim (use quotation marks for direct speech). "
-            "If someone is talking, transcribe their exact words — do not just say "
-            "'the person speaks'. Break the output into 5% steps of the total video "
-            "length (e.g. for a 60s video: 0:00–0:03, 0:03–0:06, etc)."
+            "Transcribe and describe this video moment by moment in chronological order.\n\n"
+            "Rules:\n"
+            "- Transcribe ALL speech verbatim in quotation marks. Never paraphrase or say 'the person speaks'.\n"
+            "- Describe visible actions, scenes, text on screen, and sound effects.\n"
+            "- Cover every segment — do not skip or merge time ranges.\n"
+            "- Do NOT summarize. Do NOT add conclusions, opinions, or an overview section.\n"
+            "- Output ONLY the entries, nothing else."
         )
 
     if model not in MODELS:

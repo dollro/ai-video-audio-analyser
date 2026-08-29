@@ -122,15 +122,15 @@ The models fall into two families with fundamentally different capabilities:
 **Qwen3-Omni (Multimodal)** — processes audio and video together natively. Smaller and faster than VL-235B, but understands the relationship between what is said and what is shown. This is the right choice when your video has meaningful audio (speech, music, sound effects).
 
 **Thinking vs Instruct** — The Omni family offers two variants:
+- **Instruct** _(default)_ answers immediately without a reasoning step. Best for transcription, scene description, and general audio+video understanding. Faster and more token-efficient.
 - **Thinking** uses chain-of-thought reasoning before answering. Better at complex tasks where audio and visual cues need to be connected (e.g. a lecturer pointing at a whiteboard while explaining a formula). Slower, uses more memory.
-- **Instruct** answers immediately without a reasoning step. Faster and cheaper, best for straightforward tasks like describing scenes or casual conversation.
 
 | Your use case | Recommended model |
 |---|---|
 | Quick visual description, no audio needed | `qwen3-vl-8b` _(default)_ |
 | Highest accuracy for documents, diagrams, complex visuals | `qwen3-vl-235b` |
-| Video with audio — lectures, tutorials, analysis | `qwen3-omni-30b-thinking` |
-| Video with audio — vlogs, casual content, real-time | `qwen3-omni-30b-instruct` |
+| Video with audio — transcription, description, general use | `qwen3-omni-30b-instruct` _(default for Omni)_ |
+| Video with audio — complex reasoning, connecting cues | `qwen3-omni-30b-thinking` |
 | Fast testing / prototyping | `qwen2-vl-2b` |
 
 > **Tip:** If your video has important audio (speech, narration), always pick an Omni model. The VL models are "deaf" — they will analyze the visuals in detail but have no idea what is being said.
@@ -149,7 +149,7 @@ modal run video-analyser.py \
 
 # Use Qwen3-Omni for audio + visual understanding
 modal run video-analyser.py \
-  --model qwen3-omni-30b-thinking \
+  --model qwen3-omni-30b-instruct \
   --video-url "http://commondatastorage.googleapis.com/gtv-videos-bucket/sample/WeAreGoingOnBullrun.mp4" \
   --prompt "Describe what is said and what is shown."
 
